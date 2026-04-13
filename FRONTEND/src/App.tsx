@@ -1,38 +1,61 @@
 import { useState, useEffect } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import Layout from './components/layout/Layout';
+import { TabId, Alert } from './types';
+import { type AlertItem } from './services/alerts.service';
 
-// Tipos - Asegúrate de que 'Alert' esté exportado en tu archivo de tipos
-import { TabId, Alert } from './types'; 
-
-// Páginas
-import AuthPage from './pages/AuthPage';
+import AuthPage     from './pages/AuthPage';
 import DashboardPage from './pages/DashboardPage';
-import FieldsPage from './pages/FieldsPage';
+import FieldsPage   from './pages/FieldsPage';
 import AnalysisPage from './pages/AnalysisPage';
-import HistoryPage from './pages/HistoryPage';
-import AlertsPage from './pages/AlertsPage';
+import HistoryPage  from './pages/HistoryPage';
+import AlertsPage   from './pages/AlertsPage';
 import SettingsPage from './pages/SettingsPage';
+
+// Tipo del resultado de Gemini — compartido entre AnalysisPage y DashboardPage
+interface GeminiResult {
+  field_name:        string;
+  resultado:         'Saludable' | 'Alerta' | 'Estrés';
+  enfermedades:      { count: number; detalle: string };
+  estres_hidrico:    { porcentaje: number; nivel: string };
+  plagas:            { count: number; detalle: string };
+  ndvi:              number;
+  cobertura_vegetal: number;
+  insight:           string;
+  confianza:         number;
+}
 
 export default function App() {
   const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null);
-  
-  // CORRECCIÓN 1: Tipar el estado como Alert[] en lugar de dejar que infiera never[]
-  const [alerts, setAlerts] = useState<Alert[]>([]);
+  const [alerts, setAlerts] = useState<AlertItem[]>([]);
+
+  // ── Estado compartido del último análisis ─────────────────
+  const [lastAnalysisImage,  setLastAnalysisImage]  = useState<string | null>(null);
+  const [lastAnalysisField,  setLastAnalysisField]  = useState<string | null>(null);
+  const [lastAnalysisResult, setLastAnalysisResult] = useState<GeminiResult | null>(null);
 
   useEffect(() => {
     const token = sessionStorage.getItem('token');
     setIsAuthenticated(!!token);
   }, []);
 
-  // CORRECCIÓN 2: Ajustar onNotify para que coincida con la firma (msg: string) => void
-  // Si tus componentes solo esperan un argumento, debemos dárselo así:
-  const handleNotifySimple = (msg: string) => {
-    console.log(`[TerraLogic Notify]: ${msg}`);
+  const handleNotify = (msg: string) => {
+    console.log(`[TerraLogic]: ${msg}`);
   };
 
   const handleNavigate = (tab: TabId) => {
     console.log(`Navegando a: ${tab}`);
+  };
+
+  // Cuando AnalysisPage completa un análisis, actualiza el estado global
+  const handleAnalysisComplete = (
+    imageUrl: string,
+    fieldId: string,
+    result?: GeminiResult,
+  ) => {
+    setLastAnalysisImage(imageUrl);
+    setLastAnalysisField(fieldId);
+    if (result) setLastAnalysisResult(result);
   };
 
   if (isAuthenticated === null) return null;
@@ -40,20 +63,22 @@ export default function App() {
   return (
     <BrowserRouter>
       <Routes>
-        <Route 
-          path="/auth" 
-          element={!isAuthenticated ? <AuthPage /> : <Navigate to="/dashboard" replace />} 
+        <Route
+          path="/auth"
+          element={!isAuthenticated ? <AuthPage /> : <Navigate to="/dashboard" replace />}
         />
 
         {isAuthenticated ? (
           <Route path="/*" element={
             <Layout>
               <Routes>
+
                 <Route path="/dashboard" element={
-                  <DashboardPage 
-                    lastAnalysisImage={null} 
-                    lastAnalysisField={null} 
-                    onNavigate={handleNavigate} 
+                  <DashboardPage
+                    lastAnalysisImage={lastAnalysisImage}
+                    lastAnalysisField={lastAnalysisField}
+                    lastAnalysisResult={lastAnalysisResult}
+                    onNavigate={handleNavigate}
                   />
                 } />
 
@@ -61,30 +86,27 @@ export default function App() {
                   <FieldsPage onNavigate={handleNavigate} />
                 } />
 
-                {/* CORRECCIÓN 3: Usar la firma simple de onNotify */}
                 <Route path="/analysis" element={
-                  <AnalysisPage 
-                    onNotify={handleNotifySimple} 
-                    onAnalysisComplete={(res) => console.log("Análisis terminado", res)} 
+                  <AnalysisPage
+                    onNotify={handleNotify}
+                    onAnalysisComplete={handleAnalysisComplete}
                   />
                 } />
 
                 <Route path="/history" element={
-                  <HistoryPage lastAnalysisField={null} />
+                  <HistoryPage lastAnalysisField={lastAnalysisField} />
                 } />
 
-                {/* CORRECCIÓN 4: setAlerts ahora es compatible gracias al tipado de Alert[] */}
                 <Route path="/alerts" element={
-                  <AlertsPage 
-                    alerts={alerts} 
-                    setAlerts={setAlerts} 
-                    onNavigate={handleNavigate} 
+                  <AlertsPage
+                    alerts={alerts}
+                    setAlerts={setAlerts}
+                    onNavigate={handleNavigate}
                   />
                 } />
 
-                {/* CORRECCIÓN 5: Usar la firma simple de onNotify */}
                 <Route path="/settings" element={
-                  <SettingsPage onNotify={handleNotifySimple} />
+                  <SettingsPage onNotify={handleNotify} />
                 } />
 
                 <Route path="*" element={<Navigate to="/dashboard" replace />} />
