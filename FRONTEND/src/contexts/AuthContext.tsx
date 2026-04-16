@@ -1,79 +1,62 @@
-// ─────────────────────────────────────────────────────────────
-// AuthContext.tsx
-// Contexto de autenticación MOCK para el frontend.
-//
-// ⚠️ PARA EL BACKEND:
-// Reemplazar signIn con Firebase Auth real:
-//   - signInWithEmailAndPassword
-//   - createUserWithEmailAndPassword + setDoc en Firestore
-//   - onAuthStateChanged para persistir la sesión
-// ─────────────────────────────────────────────────────────────
-
-import { createContext, useContext, useState, type ReactNode } from 'react';
+import { createContext, useContext, useState, useEffect, type ReactNode } from 'react';
 import { UserProfile } from '../types';
-
-// ─── Tipos del contexto ───────────────────────────────────────
 
 interface AuthContextType {
   profile:         UserProfile | null;
   loading:         boolean;
   isAuthenticated: boolean;
-  signIn:          () => void; // Mock — el backend usa Firebase Auth
   signOut:         () => void;
 }
 
-// ─── Usuario mock ─────────────────────────────────────────────
-
-// Datos de prueba — el backend los reemplaza con datos reales de Firestore
-const MOCK_USER: UserProfile = {
-  uid:         'mock-uid-001',
-  displayName: 'Carlos Mendoza',
-  email:       'carlos@terralogic.ai',
-  photoURL:    'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?auto=format&fit=facearea&facepad=2&w=100&h=100&q=80',
-  role:        'productor',
-  createdAt:   '2024-01-15T10:00:00.000Z',
-};
-
-// ─── Contexto ─────────────────────────────────────────────────
-
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-// ─── Provider ─────────────────────────────────────────────────
-
 export function AuthProvider({ children }: { children: ReactNode }) {
-  // Arranca en null para mostrar la pantalla de login
   const [profile, setProfile] = useState<UserProfile | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
 
-  const isAuthenticated = profile !== null;
-
-  // Simula login exitoso con el usuario mock
-  const signIn = () => {
-    setLoading(true);
-    setTimeout(() => {
-      setProfile(MOCK_USER);
+  useEffect(() => {
+    try {
+      const raw = sessionStorage.getItem('user');
+      if (raw) {
+        const data = JSON.parse(raw);
+        setProfile({
+          uid:         data.uid,
+          displayName: data.displayName,
+          email:       data.email,
+          photoURL:    data.photoURL ?? undefined,
+          role:        data.role,
+          createdAt:   data.createdAt,
+        });
+      }
+    } catch {
+      sessionStorage.removeItem('user');
+      sessionStorage.removeItem('token');
+    } finally {
       setLoading(false);
-    }, 800);
-  };
+    }
+  }, []);
 
-  // Cierra sesión y regresa al login
   const signOut = () => {
+    sessionStorage.removeItem('token');
+    sessionStorage.removeItem('user');
     setProfile(null);
+    window.location.href = '/auth';
   };
 
   return (
-    <AuthContext.Provider value={{ profile, loading, isAuthenticated, signIn, signOut }}>
+    <AuthContext.Provider value={{
+      profile,
+      loading,
+      isAuthenticated: profile !== null,
+      signOut,
+    }}>
       {children}
     </AuthContext.Provider>
   );
 }
 
-// ─── Hook ─────────────────────────────────────────────────────
-
 export function useAuth(): AuthContextType {
   const context = useContext(AuthContext);
-  if (!context) {
-    throw new Error('useAuth debe usarse dentro de un AuthProvider');
-  }
+  if (!context) throw new Error('useAuth debe usarse dentro de un AuthProvider');
   return context;
 }
