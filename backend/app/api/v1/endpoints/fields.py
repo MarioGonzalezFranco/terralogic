@@ -1,35 +1,76 @@
 # app/api/v1/endpoints/fields.py
+#
+# SEGURIDAD:
+# - Query parametrizada con DISTINCT ON seguro
+# - Todos los valores numéricos casteados explícitamente
+# - Sin concatenación de strings en SQL
 
 from fastapi import APIRouter, Depends
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 from sqlalchemy import text
+from typing import Optional
 
 from app.db.session import get_db
+from app.core.security import decode_token
 
 router = APIRouter()
+bearer = HTTPBearer(auto_error=False)
+
+
+def get_user_id(credentials: HTTPAuthorizationCredentials) -> Optional[str]:
+    if not credentials:
+        return None
+    payload = decode_token(credentials.credentials)
+    return payload.get("sub") if payload else None
 
 
 @router.get("/")
-def list_fields(db: Session = Depends(get_db)):
-    rows = db.execute(text("""
-        SELECT DISTINCT ON (field_name)
-            field_name,
-            result,
-            ndvi,
-            cobertura,
-            water_stress_pct,
-            diseases_count,
-            plagas_count,
-            ai_insight,
-            analyzed_at
-        FROM analysis_records
-        WHERE field_name IS NOT NULL
-        ORDER BY field_name, analyzed_at DESC
-    """)).fetchall()
+def list_fields(
+    credentials: HTTPAuthorizationCredentials = Depends(bearer),
+    db: Session = Depends(get_db),
+):
+    user_id = get_user_id(credentials)
+
+    # Si hay usuario autenticado → solo sus campos
+    # Si no → todos los campos (compatibilidad)
+    if user_id:
+        rows = db.execute(text("""
+            SELECT DISTINCT ON (field_name)
+                field_name,
+                result,
+                ndvi,
+                cobertura,
+                water_stress_pct,
+                diseases_count,
+                plagas_count,
+                ai_insight,
+                analyzed_at
+            FROM analysis_records
+            WHERE field_name IS NOT NULL
+              AND user_id = :user_id
+            ORDER BY field_name, analyzed_at DESC
+        """), {"user_id": user_id}).fetchall()
+    else:
+        rows = db.execute(text("""
+            SELECT DISTINCT ON (field_name)
+                field_name,
+                result,
+                ndvi,
+                cobertura,
+                water_stress_pct,
+                diseases_count,
+                plagas_count,
+                ai_insight,
+                analyzed_at
+            FROM analysis_records
+            WHERE field_name IS NOT NULL
+            ORDER BY field_name, analyzed_at DESC
+        """)).fetchall()
 
     fields = []
     for r in rows:
-        # Convertir todo a tipos Python nativos para evitar Decimal
+        # Cast explícito a tipos Python nativos — previene errores Decimal
         ndvi      = float(r[2]) if r[2] is not None else 0.0
         cobertura = int(r[3])   if r[3] is not None else 0
         resultado = r[1]        or 'Saludable'
@@ -37,7 +78,7 @@ def list_fields(db: Session = Depends(get_db)):
         diseases  = int(r[5])   if r[5] is not None else 0
         plagas    = int(r[6])   if r[6] is not None else 0
 
-        # Calcular salud (0-100)
+        # Cálculo de salud con valores ya validados
         health = min(100, max(0, int(
             (ndvi * 60) +
             ((100 - stress) * 0.25) +

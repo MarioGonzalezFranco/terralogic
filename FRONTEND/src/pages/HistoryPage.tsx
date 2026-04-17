@@ -75,17 +75,35 @@ export default function HistoryPage({ lastAnalysisField }: HistoryPageProps) {
 
   // ── Exportar CSV ────────────────────────────────────────────
   const handleExport = () => {
-    const csv = [
-      ['Fecha', 'Hora', 'Campo', 'Resultado', 'NDVI', 'Estrés Hídrico', 'Enfermedades', 'Plagas'].join(','),
+    // Envuelve un valor en comillas y escapa comillas internas
+    const q = (val: string | number) => `"${String(val).replace(/"/g, '""')}"`;
+
+    // sep=; indica a Excel en español que use punto y coma como separador
+    const rows = [
+      'sep=;',
+      ['Fecha', 'Hora', 'Campo', 'Resultado', 'NDVI', 'Estres Hidrico', 'Enfermedades', 'Plagas', 'Nivel Estres', 'Insight'].map(q).join(';'),
       ...filtered.map(r => [
-        r.date, r.time, r.field_name, r.result,
-        r.ndvi, `${r.water_stress_pct}%`, r.diseases_count, r.plagas_count,
-      ].join(','))
-    ].join('\n');
-    const blob = new Blob([csv], { type: 'text/csv' });
+        q(r.date),
+        q(r.time),
+        q(r.field_name),
+        q(r.result),
+        q(r.ndvi.toFixed(2)),
+        q(`${r.water_stress_pct}%`),
+        q(r.diseases_count),
+        q(r.plagas_count),
+        q(r.nivel_estres),
+        q(r.ai_insight),
+      ].join(';'))
+    ].join('\r\n');
+
+    // BOM UTF-8 — hace que Excel abra el archivo con encoding correcto
+    const BOM  = '\uFEFF';
+    const blob = new Blob([BOM + rows], { type: 'text/csv;charset=utf-8;' });
     const url  = URL.createObjectURL(blob);
     const a    = document.createElement('a');
-    a.href = url; a.download = 'historial-terralogic.csv'; a.click();
+    a.href     = url;
+    a.download = `historial-terralogic-${new Date().toISOString().split('T')[0]}.csv`;
+    a.click();
     URL.revokeObjectURL(url);
   };
 
