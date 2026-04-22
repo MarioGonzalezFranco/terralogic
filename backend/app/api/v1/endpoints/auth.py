@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Request, Response
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
+from sqlalchemy import text
 import uuid
 from pydantic import BaseModel
 from typing import Optional
@@ -17,9 +18,13 @@ from app.core.security import (
 from app.core.login_tracker import is_blocked, record_failure, record_success
 from app.core.token_blacklist import blacklist_token, is_blacklisted
 from app.core.rate_limit import limiter
+from app.core.email_service import send_otp_email
+from app.core.verification import generate_otp, verify_otp, has_pending_otp
 
 router = APIRouter()
 bearer = HTTPBearer(auto_error=False)
+
+ALLOWED_EMAIL_DOMAINS = {"gmail.com", "outlook.com", "hotmail.com"}
 
 
 # ── Helpers ───────────────────────────────────────────────────
@@ -31,6 +36,11 @@ def get_client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
+def validate_email_domain(email: str) -> bool:
+    domain = email.split("@")[-1].lower()
+    return domain in ALLOWED_EMAIL_DOMAINS
+
+
 def get_current_user(
     request:     Request,
     response:    Response,
@@ -39,31 +49,22 @@ def get_current_user(
 ) -> User:
     if not credentials:
         raise HTTPException(status_code=401, detail="Token requerido.")
-
     payload = decode_token(credentials.credentials)
     if not payload:
         raise HTTPException(status_code=401, detail="Token inválido o expirado.")
-
     jti = payload.get("jti")
     if jti and is_blacklisted(jti):
         raise HTTPException(status_code=401, detail="Sesión cerrada. Inicia sesión nuevamente.")
-
     if is_token_inactive(payload):
         if jti:
             blacklist_token(jti, payload.get("exp", 0))
-        raise HTTPException(
-            status_code=401,
-            detail="Sesión expirada por inactividad. Inicia sesión nuevamente."
-        )
-
+        raise HTTPException(status_code=401, detail="Sesión expirada por inactividad.")
     user = db.query(User).filter(User.email == payload.get("sub")).first()
     if not user:
         raise HTTPException(status_code=404, detail="Usuario no encontrado.")
-
     new_token = refresh_token_activity(credentials.credentials)
     if new_token:
         response.headers["X-Refreshed-Token"] = new_token
-
     return user
 
 
@@ -78,7 +79,12 @@ async def register_user(request: Request, db: Session = Depends(get_db)):
     except Exception as e:
         raise HTTPException(status_code=422, detail=f"Datos inválidos: {str(e)}")
 
-    # Validar política de contraseñas
+    if not validate_email_domain(user_in.email):
+        raise HTTPException(
+            status_code=400,
+            detail="Solo se permiten correos de Gmail (@gmail.com) o Outlook (@outlook.com)."
+        )
+
     valid, msg = validate_password_strength(user_in.password)
     if not valid:
         raise HTTPException(status_code=400, detail=msg)
@@ -104,18 +110,87 @@ async def register_user(request: Request, db: Session = Depends(get_db)):
         db.rollback()
         raise HTTPException(status_code=500, detail="Error al guardar el usuario.")
 
-    token = create_access_token(subject=new_user.email)
+    # Marcar como no verificado
+    try:
+        db.execute(text("UPDATE users SET is_verified = FALSE WHERE id = :id"), {"id": str(new_user.id)})
+        db.commit()
+    except Exception:
+        pass
+
+    # Generar OTP y enviar correo
+    otp_code = generate_otp(new_user.email)
+    send_otp_email(
+        to_email=new_user.email,
+        display_name=new_user.display_name or "Usuario",
+        otp_code=otp_code,
+    )
+
     return {
-        "user": {
-            "uid":         str(new_user.id),
-            "email":       new_user.email,
-            "displayName": new_user.display_name,
-            "role":        new_user.role,
-            "createdAt":   str(new_user.created_at),
-        },
+        "message":    "Cuenta creada. Revisa tu correo e ingresa el código de verificación.",
+        "email":      new_user.email,
+        "requires_verification": True,
+    }
+
+
+# ── Verificar OTP ─────────────────────────────────────────────
+
+class VerifyOTPPayload(BaseModel):
+    email: str
+    code:  str
+
+@router.post("/verify-otp")
+def verify_otp_endpoint(payload: VerifyOTPPayload, db: Session = Depends(get_db)):
+    """Verifica el código OTP de 6 dígitos ingresado por el usuario."""
+    valid, msg = verify_otp(payload.email, payload.code)
+
+    if not valid:
+        raise HTTPException(status_code=400, detail=msg)
+
+    user = db.query(User).filter(User.email == payload.email).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Usuario no encontrado.")
+
+    # Marcar cuenta como verificada
+    try:
+        db.execute(text("UPDATE users SET is_verified = TRUE WHERE email = :email"), {"email": payload.email})
+        db.commit()
+    except Exception:
+        pass
+
+    token = create_access_token(subject=user.email)
+    return {
+        "message":      "¡Cuenta verificada exitosamente!",
         "access_token": token,
         "token_type":   "bearer",
+        "user": {
+            "uid":         str(user.id),
+            "email":       user.email,
+            "displayName": user.display_name,
+            "role":        user.role,
+            "createdAt":   str(user.created_at),
+        }
     }
+
+
+# ── Reenviar OTP ──────────────────────────────────────────────
+
+class ResendOTPPayload(BaseModel):
+    email: str
+
+@router.post("/resend-otp")
+@limiter.limit("3/minute")
+async def resend_otp(request: Request, payload: ResendOTPPayload, db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.email == payload.email).first()
+    if not user:
+        return {"message": "Si el correo existe, recibirás un nuevo código."}
+
+    otp_code = generate_otp(user.email)
+    send_otp_email(
+        to_email=user.email,
+        display_name=user.display_name or "Usuario",
+        otp_code=otp_code,
+    )
+    return {"message": "Nuevo código enviado. Revisa tu correo."}
 
 
 # ── Login ─────────────────────────────────────────────────────
@@ -128,25 +203,27 @@ async def login(request: Request, user_in: UserLogin, db: Session = Depends(get_
 
     blocked, seconds = is_blocked(ip, email)
     if blocked:
-        raise HTTPException(
-            status_code=429,
+        raise HTTPException(status_code=429,
             detail=f"Cuenta bloqueada temporalmente. Intenta en {seconds} segundos.",
-            headers={"Retry-After": str(seconds)},
-        )
+            headers={"Retry-After": str(seconds)})
 
     user = db.query(User).filter(User.email == email).first()
-
     if not user or not verify_password(user_in.password, user.password_hash):
         now_blocked, remaining = record_failure(ip, email)
         if now_blocked:
-            raise HTTPException(
-                status_code=429,
-                detail="Demasiados intentos fallidos. Cuenta bloqueada por 5 minutos.",
-            )
-        raise HTTPException(
-            status_code=401,
-            detail=f"Credenciales incorrectas. {remaining} intento(s) restante(s).",
-        )
+            raise HTTPException(status_code=429, detail="Demasiados intentos fallidos. Bloqueado 5 minutos.")
+        raise HTTPException(status_code=401, detail=f"Credenciales incorrectas. {remaining} intento(s) restante(s).")
+
+    # Verificar si la cuenta está verificada
+    try:
+        result = db.execute(text("SELECT is_verified FROM users WHERE email = :email"), {"email": email}).fetchone()
+        if result and result[0] is False:
+            raise HTTPException(status_code=403,
+                detail="Cuenta no verificada. Revisa tu correo e ingresa el código de verificación.")
+    except HTTPException:
+        raise
+    except Exception:
+        pass
 
     record_success(ip, email)
     token = create_access_token(subject=user.email)
@@ -191,7 +268,7 @@ def get_me(current_user: User = Depends(get_current_user)):
     }
 
 
-# ── Actualizar nombre ─────────────────────────────────────────
+# ── Actualizar perfil ─────────────────────────────────────────
 
 class UpdateProfilePayload(BaseModel):
     display_name: Optional[str] = None
@@ -230,17 +307,11 @@ def change_password(
 ):
     if not verify_password(payload.current_password, current_user.password_hash):
         raise HTTPException(status_code=400, detail="La contraseña actual es incorrecta.")
-
     valid, msg = validate_password_strength(payload.new_password)
     if not valid:
         raise HTTPException(status_code=400, detail=msg)
-
     if payload.current_password == payload.new_password:
-        raise HTTPException(
-            status_code=400,
-            detail="La nueva contraseña debe ser diferente a la actual."
-        )
-
+        raise HTTPException(status_code=400, detail="La nueva contraseña debe ser diferente a la actual.")
     if credentials:
         token_payload = decode_token(credentials.credentials)
         if token_payload:
@@ -248,8 +319,6 @@ def change_password(
             exp = token_payload.get("exp", 0)
             if jti:
                 blacklist_token(jti, exp)
-
     current_user.password_hash = get_password_hash(payload.new_password)
     db.commit()
-
     return {"message": "Contraseña actualizada. Por favor inicia sesión nuevamente."}

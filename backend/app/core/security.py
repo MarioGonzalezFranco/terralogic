@@ -3,19 +3,20 @@ import re
 from datetime import datetime, timedelta
 from typing import Any, Union
 import uuid
+from dotenv import load_dotenv
 from jose import jwt
 from passlib.context import CryptContext
 
-SECRET_KEY = os.environ.get(
-    "JWT_SECRET_KEY",
-    "terra_logic_3e94bb706b4c165eba0e589f0c7748ee28b0c673"
-)
+load_dotenv()
+ 
+SECRET_KEY = os.environ.get("JWT_SECRET_KEY", "")
+if not SECRET_KEY:
+    raise RuntimeError("JWT_SECRET_KEY no está definida en el archivo .env")
 ALGORITHM                    = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES  = int(os.environ.get("JWT_EXPIRE_MINUTES", "480"))
 INACTIVITY_TIMEOUT_MINUTES   = 60  # Sesión expira tras 60 min sin actividad
-
+ 
 PWD_CONTEXT = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
 
 # ── Hash y verificación ───────────────────────────────────────
 

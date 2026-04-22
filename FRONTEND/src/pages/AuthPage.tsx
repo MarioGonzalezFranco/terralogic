@@ -1,79 +1,182 @@
-import { useState, useEffect, type FormEvent } from 'react';
+import { useState, useEffect, useRef, type FormEvent } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Sprout, ArrowRight, AlertCircle, Loader2, Eye, EyeOff, CheckCircle2, XCircle } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import { Sprout, ArrowRight, AlertCircle, Loader2, Eye, EyeOff, CheckCircle2, XCircle, Mail } from 'lucide-react';
 import { registerUser, loginUser } from '../services/auth.service';
 import { useYear } from '../hooks';
 
+const API_URL = 'http://127.0.0.1:8000/api/v1';
 const isValidEmail = (email: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 
-// ── Imágenes del carrusel — agrícolas de alta calidad ─────────
 const CAROUSEL_SLIDES = [
-  {
-    url:     'https://images.unsplash.com/photo-1500382017468-9049fed747ef?auto=format&fit=crop&q=80&w=2000',
-    title:   'Monitoreo de cultivos',
-    caption: 'Análisis multiespectral en tiempo real con Gemini AI',
-  },
-  {
-    url:     'https://images.unsplash.com/photo-1574323347407-f5e1ad6d020b?auto=format&fit=crop&q=80&w=2000',
-    title:   'Detección temprana',
-    caption: 'Identifica enfermedades y plagas antes de que se propaguen',
-  },
-  {
-    url:     'https://images.unsplash.com/photo-1464226184884-fa280b87c399?auto=format&fit=crop&q=80&w=2000',
-    title:   'Gestión inteligente',
-    caption: 'Optimiza el riego y los recursos con datos precisos',
-  },
-  {
-    url:     'https://images.unsplash.com/photo-1625246333195-78d9c38ad449?auto=format&fit=crop&q=80&w=2000',
-    title:   'Agricultura de precisión',
-    caption: 'Toma decisiones basadas en evidencia científica',
-  },
-  {
-    url:     'https://images.unsplash.com/photo-1560493676-04071c5f467b?auto=format&fit=crop&q=80&w=2000',
-    title:   'Rendimiento óptimo',
-    caption: 'Maximiza la productividad de cada hectárea',
-  },
+  { url: 'https://images.unsplash.com/photo-1500382017468-9049fed747ef?auto=format&fit=crop&q=80&w=2000', title: 'Monitoreo de cultivos', caption: 'Análisis multiespectral en tiempo real con Gemini AI' },
+  { url: 'https://images.unsplash.com/photo-1574323347407-f5e1ad6d020b?auto=format&fit=crop&q=80&w=2000', title: 'Detección temprana', caption: 'Identifica enfermedades y plagas antes de que se propaguen' },
+  { url: 'https://images.unsplash.com/photo-1464226184884-fa280b87c399?auto=format&fit=crop&q=80&w=2000', title: 'Gestión inteligente', caption: 'Optimiza el riego y los recursos con datos precisos' },
+  { url: 'https://images.unsplash.com/photo-1625246333195-78d9c38ad449?auto=format&fit=crop&q=80&w=2000', title: 'Agricultura de precisión', caption: 'Toma decisiones basadas en evidencia científica' },
+  { url: 'https://images.unsplash.com/photo-1560493676-04071c5f467b?auto=format&fit=crop&q=80&w=2000', title: 'Rendimiento óptimo', caption: 'Maximiza la productividad de cada hectárea' },
 ];
 
-// ── Reglas de contraseña ──────────────────────────────────────
 const PASSWORD_RULES = [
-  { id: 'length', label: 'Mínimo 8 caracteres',  test: (p: string) => p.length >= 8         },
-  { id: 'number', label: 'Al menos un número',   test: (p: string) => /[0-9]/.test(p)        },
-  { id: 'letter', label: 'Al menos una letra',   test: (p: string) => /[A-Za-z]/.test(p)     },
+  { id: 'length', label: 'Mínimo 8 caracteres',  test: (p: string) => p.length >= 8     },
+  { id: 'number', label: 'Al menos un número',   test: (p: string) => /[0-9]/.test(p)   },
+  { id: 'letter', label: 'Al menos una letra',   test: (p: string) => /[A-Za-z]/.test(p)},
 ];
 
-function getStrength(password: string): number {
-  return PASSWORD_RULES.filter(r => r.test(password)).length;
-}
-
-const STRENGTH_COLORS = ['', 'bg-red-400', 'bg-orange-400', 'bg-agri-green-500'];
+function getStrength(p: string) { return PASSWORD_RULES.filter(r => r.test(p)).length; }
+const STRENGTH_COLORS = ['', 'bg-red-400', 'bg-orange-400', 'bg-agri-green-400'];
 const STRENGTH_TEXT   = ['', 'text-red-500', 'text-orange-500', 'text-agri-green-600'];
 const STRENGTH_LABELS = ['', 'Débil', 'Media', 'Fuerte'];
 
-export default function AuthPage() {
-  const year     = useYear();
-  const navigate = useNavigate();
+// ── Pantalla de ingreso de código OTP ─────────────────────────
+function OTPScreen({ email, onSuccess }: { email: string; onSuccess: (token: string, user: any) => void }) {
+  const [digits,    setDigits]    = useState(['', '', '', '', '', '']);
+  const [loading,   setLoading]   = useState(false);
+  const [error,     setError]     = useState<string | null>(null);
+  const [resending, setResending] = useState(false);
+  const [resent,    setResent]    = useState(false);
+  const refs = [useRef<HTMLInputElement>(null), useRef<HTMLInputElement>(null), useRef<HTMLInputElement>(null),
+                useRef<HTMLInputElement>(null), useRef<HTMLInputElement>(null), useRef<HTMLInputElement>(null)];
 
-  // ── Carrusel ──────────────────────────────────────────────
+  const handleChange = (i: number, val: string) => {
+    if (!/^\d*$/.test(val)) return;
+    const newDigits = [...digits];
+    newDigits[i] = val.slice(-1);
+    setDigits(newDigits);
+    setError(null);
+    if (val && i < 5) refs[i + 1].current?.focus();
+  };
+
+  const handleKeyDown = (i: number, e: React.KeyboardEvent) => {
+    if (e.key === 'Backspace' && !digits[i] && i > 0) refs[i - 1].current?.focus();
+  };
+
+  const handlePaste = (e: React.ClipboardEvent) => {
+    const pasted = e.clipboardData.getData('text').replace(/\D/g, '').slice(0, 6);
+    if (pasted.length === 6) {
+      setDigits(pasted.split(''));
+      refs[5].current?.focus();
+    }
+  };
+
+  const handleVerify = async () => {
+    const code = digits.join('');
+    if (code.length < 6) { setError('Ingresa los 6 dígitos del código.'); return; }
+    setLoading(true);
+    setError(null);
+    try {
+      const res  = await fetch(`${API_URL}/auth/verify-otp`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ email, code }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        onSuccess(data.access_token, data.user);
+      } else {
+        setError(data.detail || 'Código incorrecto.');
+        setDigits(['', '', '', '', '', '']);
+        refs[0].current?.focus();
+      }
+    } catch {
+      setError('Error de conexión.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleResend = async () => {
+    setResending(true);
+    try {
+      await fetch(`${API_URL}/auth/resend-otp`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ email }),
+      });
+      setResent(true);
+      setTimeout(() => setResent(false), 4000);
+    } catch {}
+    finally { setResending(false); }
+  };
+
+  return (
+    <div className="w-full p-10 text-center"
+      style={{ background:'rgba(240,248,240,0.88)', backdropFilter:'blur(32px)', WebkitBackdropFilter:'blur(32px)',
+               border:'1px solid rgba(255,255,255,0.6)', borderRadius:'2rem', boxShadow:'0 8px 64px rgba(0,0,0,0.25)' }}>
+
+      <div className="w-16 h-16 rounded-full bg-agri-green-100 flex items-center justify-center mx-auto mb-5">
+        <Mail size={32} className="text-agri-green-600" />
+      </div>
+      <h2 className="text-2xl font-black text-agri-green-950 mb-2">Verifica tu cuenta</h2>
+      <p className="text-earth-500 text-sm mb-1">Ingresa el código de 6 dígitos enviado a:</p>
+      <p className="font-black text-agri-green-700 text-sm mb-6">{email}</p>
+
+      {/* Inputs OTP */}
+      <div className="flex justify-center gap-3 mb-6" onPaste={handlePaste}>
+        {digits.map((d, i) => (
+          <input key={i} ref={refs[i]} type="text" inputMode="numeric" maxLength={1} value={d}
+            onChange={e => handleChange(i, e.target.value)}
+            onKeyDown={e => handleKeyDown(i, e)}
+            className="w-12 h-14 text-center text-2xl font-black rounded-2xl outline-none transition-all"
+            style={{
+              background: d ? 'rgba(46,125,50,0.12)' : 'rgba(255,255,255,0.6)',
+              border: d ? '2px solid #2E7D32' : '2px solid rgba(0,0,0,0.12)',
+              color: '#1B5E20',
+            }}
+            onFocus={e => e.target.style.border = '2px solid #2E7D32'}
+            onBlur={e  => e.target.style.border = d ? '2px solid #2E7D32' : '2px solid rgba(0,0,0,0.12)'}
+          />
+        ))}
+      </div>
+
+      {/* Error */}
+      <AnimatePresence>
+        {error && (
+          <motion.div initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
+            className="p-3 rounded-xl flex gap-2 text-xs font-bold text-red-700 mb-4"
+            style={{ background: 'rgba(254,226,226,0.9)', border: '1px solid rgba(239,68,68,0.4)' }}>
+            <AlertCircle size={14} className="flex-shrink-0 mt-0.5" /> {error}
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Botón verificar */}
+      <button onClick={handleVerify} disabled={loading || digits.join('').length < 6}
+        className="w-full py-4 rounded-2xl font-black text-sm text-white mb-4 transition-all disabled:opacity-50"
+        style={{ background: '#16a34a' }}>
+        {loading ? <Loader2 className="animate-spin mx-auto" size={18} /> : 'Verificar cuenta →'}
+      </button>
+
+      {/* Reenviar */}
+      <div className="flex items-center justify-center gap-2 text-sm">
+        <span className="text-earth-500">¿No llegó el código?</span>
+        <button onClick={handleResend} disabled={resending}
+          className="font-black text-agri-green-600 hover:text-agri-green-800 transition-colors disabled:opacity-50">
+          {resending ? 'Enviando...' : resent ? '¡Enviado!' : 'Reenviar código'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ── Página principal de autenticación ─────────────────────────
+export default function AuthPage() {
+  const year = useYear();
   const [currentSlide, setCurrentSlide] = useState(0);
 
   useEffect(() => {
-    const timer = setInterval(() => {
-      setCurrentSlide(prev => (prev + 1) % CAROUSEL_SLIDES.length);
-    }, 5000);
-    return () => clearInterval(timer);
+    const t = setInterval(() => setCurrentSlide(p => (p + 1) % CAROUSEL_SLIDES.length), 5000);
+    return () => clearInterval(t);
   }, []);
 
-  // ── Formulario ────────────────────────────────────────────
-  const [isLogin,      setIsLogin]      = useState(true);
-  const [displayName,  setDisplayName]  = useState('');
-  const [email,        setEmail]        = useState('');
-  const [password,     setPassword]     = useState('');
-  const [showPassword, setShowPassword] = useState(false);
-  const [loading,      setLoading]      = useState(false);
-  const [error,        setError]        = useState<string | null>(null);
-  const [pwdFocused,   setPwdFocused]   = useState(false);
+  const [isLogin,         setIsLogin]         = useState(true);
+  const [displayName,     setDisplayName]     = useState('');
+  const [email,           setEmail]           = useState('');
+  const [password,        setPassword]        = useState('');
+  const [showPassword,    setShowPassword]    = useState(false);
+  const [loading,         setLoading]         = useState(false);
+  const [error,           setError]           = useState<string | null>(null);
+  const [pwdFocused,      setPwdFocused]      = useState(false);
+  const [showOTP,         setShowOTP]         = useState(false);
+  const [pendingEmail,    setPendingEmail]    = useState('');
 
   const strength  = getStrength(password);
   const allPassed = strength === PASSWORD_RULES.length;
@@ -89,237 +192,225 @@ export default function AuthPage() {
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setError(null);
-    const validationError = validate();
-    if (validationError) { setError(validationError); return; }
+    const err = validate();
+    if (err) { setError(err); return; }
     setLoading(true);
     try {
-      const response = isLogin
-        ? await loginUser({ email, password })
-        : await registerUser({ email, password, display_name: displayName });
-      sessionStorage.setItem('token', response.access_token);
-      sessionStorage.setItem('user', JSON.stringify(response.user));
-      window.location.href = '/dashboard';
+      if (isLogin) {
+        const response = await loginUser({ email, password });
+        sessionStorage.setItem('token', response.access_token);
+        sessionStorage.setItem('user', JSON.stringify(response.user));
+        window.location.href = '/dashboard';
+      } else {
+        await registerUser({ email, password, display_name: displayName });
+        setPendingEmail(email);
+        setShowOTP(true);
+      }
     } catch (err: any) {
-      const msg = err.response?.data?.detail || err.message || 'Error de conexión con el servidor';
+      const msg = err.response?.data?.detail || err.message || 'Error de conexión';
       setError(typeof msg === 'string' ? msg : 'Credenciales inválidas');
     } finally {
       setLoading(false);
     }
   };
 
+  const handleOTPSuccess = (token: string, user: any) => {
+    sessionStorage.setItem('token', token);
+    sessionStorage.setItem('user', JSON.stringify(user));
+    window.location.href = '/dashboard';
+  };
+
   const switchMode = (login: boolean) => {
-    setIsLogin(login);
-    setError(null);
-    setEmail(''); setPassword(''); setDisplayName('');
-    setPwdFocused(false);
+    setIsLogin(login); setError(null);
+    setEmail(''); setPassword(''); setDisplayName(''); setPwdFocused(false);
   };
 
   const slide = CAROUSEL_SLIDES[currentSlide];
 
+  const inputStyle = {
+    background: 'rgba(255,255,255,0.55)', border: '1px solid rgba(0,0,0,0.12)',
+    backdropFilter: 'blur(8px)', color: '#1a2e1a',
+  };
+
   return (
-    <div className="min-h-screen flex overflow-hidden">
+    <div className="min-h-screen relative overflow-hidden flex items-center justify-center">
+      {/* Fondo carrusel */}
+      <AnimatePresence mode="sync">
+        <motion.div key={currentSlide} initial={{ opacity: 0, scale: 1.06 }} animate={{ opacity: 1, scale: 1 }}
+          exit={{ opacity: 0 }} transition={{ duration: 1.4, ease: 'easeInOut' }} className="absolute inset-0">
+          <img src={slide.url} alt="" className="w-full h-full object-cover" />
+          <div className="absolute inset-0 bg-agri-green-950/60" />
+        </motion.div>
+      </AnimatePresence>
 
-      {/* ── Columna izquierda — carrusel ── */}
-      <div className="hidden lg:block relative overflow-hidden" style={{ width: '55%' }}>
-
-        {/* Imágenes con fade */}
-        <AnimatePresence mode="sync">
-          <motion.div
-            key={currentSlide}
-            initial={{ opacity: 0, scale: 1.04 }}
-            animate={{ opacity: 1, scale: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 1.2, ease: 'easeInOut' }}
-            className="absolute inset-0"
-          >
-            <img
-              src={slide.url}
-              alt={slide.title}
-              className="w-full h-full object-cover"
-            />
-            {/* Overlay degradado */}
-            <div className="absolute inset-0 bg-gradient-to-t from-agri-green-950/90 via-agri-green-950/40 to-agri-green-950/20" />
-          </motion.div>
-        </AnimatePresence>
-
-        {/* Contenido encima del carrusel */}
-        <div className="relative z-10 h-full flex flex-col justify-between p-16">
-          {/* Logo */}
+      <div className="relative z-10 w-full min-h-screen flex">
+        {/* Columna izquierda */}
+        <div className="hidden lg:flex flex-col justify-between p-16 flex-1">
           <div className="flex items-center gap-3">
-            <div className="w-12 h-12 rounded-xl bg-agri-green-500 flex items-center justify-center text-white shadow-lg">
-              <Sprout size={28} />
+            <div className="w-12 h-12 rounded-2xl bg-agri-green-500/80 backdrop-blur-sm flex items-center justify-center text-white border border-agri-green-400/30">
+              <Sprout size={26} />
             </div>
-            <h1 className="text-3xl font-black text-white tracking-tighter">TerraLogic</h1>
+            <div>
+              <h1 className="text-2xl font-black text-white tracking-tighter leading-none">TerraLogic</h1>
+              <p className="text-agri-green-400 text-[10px] font-bold uppercase tracking-widest">IA Agrícola de Precisión</p>
+            </div>
           </div>
-
-          {/* Texto dinámico del slide */}
           <div className="max-w-lg">
             <AnimatePresence mode="wait">
-              <motion.div
-                key={currentSlide}
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -20 }}
-                transition={{ duration: 0.6, ease: 'easeOut' }}
-              >
-                <h2 className="text-5xl font-black text-white leading-tight mb-4">
-                  {slide.title}
-                </h2>
-                <p className="text-agri-green-100 text-lg font-medium leading-relaxed opacity-80">
-                  {slide.caption}
-                </p>
+              <motion.div key={currentSlide} initial={{ opacity: 0, y: 24 }} animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -16 }} transition={{ duration: 0.7 }}>
+                <h2 className="text-6xl font-black text-white leading-tight mb-4 tracking-tighter">{slide.title}</h2>
+                <p className="text-white/70 text-lg font-medium leading-relaxed">{slide.caption}</p>
               </motion.div>
             </AnimatePresence>
-
-            {/* Indicadores de slide */}
-            <div className="flex items-center gap-2 mt-8">
+            <div className="flex items-center gap-2 mt-10">
               {CAROUSEL_SLIDES.map((_, i) => (
-                <button
-                  key={i}
-                  onClick={() => setCurrentSlide(i)}
-                  className={`transition-all duration-300 rounded-full ${
-                    i === currentSlide
-                      ? 'w-8 h-2 bg-agri-green-400'
-                      : 'w-2 h-2 bg-white/30 hover:bg-white/50'
-                  }`}
-                />
+                <button key={i} onClick={() => setCurrentSlide(i)}
+                  className={`transition-all duration-300 rounded-full ${i === currentSlide ? 'w-8 h-2 bg-agri-green-400' : 'w-2 h-2 bg-white/30'}`} />
               ))}
             </div>
           </div>
-
-          <p className="text-agri-green-700 text-xs font-bold uppercase tracking-widest opacity-60">
-            © {year} TerraLogic AI
-          </p>
+          <p className="text-white/30 text-xs font-bold uppercase tracking-widest">© {year} TerraLogic AI</p>
         </div>
-      </div>
 
-      {/* ── Columna derecha — formulario ── */}
-      <div className="w-full lg:flex-1 min-h-screen bg-white flex items-center justify-center px-10 py-12">
-        <div className="w-full max-w-sm">
-          <h2 className="text-3xl font-black text-agri-green-950 tracking-tight mb-2">
-            {isLogin ? 'Bienvenido de nuevo' : 'Crea tu cuenta'}
-          </h2>
+        {/* Columna derecha */}
+        <div className="w-full lg:w-[460px] flex items-center justify-center p-6 lg:p-10">
+          <AnimatePresence mode="wait">
+            {showOTP ? (
+              <motion.div key="otp" initial={{ opacity: 0, x: 30 }} animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: -30 }} className="w-full">
+                <OTPScreen email={pendingEmail} onSuccess={handleOTPSuccess} />
+              </motion.div>
+            ) : (
+              <motion.div key="form" initial={{ opacity: 0, y: 24 }} animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -16 }} className="w-full"
+                style={{ background:'rgba(240,248,240,0.88)', backdropFilter:'blur(32px)',
+                         WebkitBackdropFilter:'blur(32px)', border:'1px solid rgba(255,255,255,0.6)',
+                         borderRadius:'2rem', padding:'2.5rem', boxShadow:'0 8px 64px rgba(0,0,0,0.25)' }}>
 
-          {/* Tabs */}
-          <div className="flex gap-2 p-1.5 bg-earth-200/40 rounded-2xl mb-6">
-            <button onClick={() => switchMode(true)}
-              className={`flex-1 py-3 text-sm font-bold rounded-xl transition-all ${isLogin ? 'bg-white shadow-md text-agri-green-800' : 'text-earth-500'}`}>
-              Iniciar Sesión
-            </button>
-            <button onClick={() => switchMode(false)}
-              className={`flex-1 py-3 text-sm font-bold rounded-xl transition-all ${!isLogin ? 'bg-white shadow-md text-agri-green-800' : 'text-earth-500'}`}>
-              Crear Cuenta
-            </button>
-          </div>
+                <div className="flex lg:hidden items-center gap-2 mb-6">
+                  <div className="w-8 h-8 rounded-xl bg-agri-green-600 flex items-center justify-center text-white"><Sprout size={16} /></div>
+                  <span className="font-black text-agri-green-950 text-lg">TerraLogic</span>
+                </div>
 
-          <form onSubmit={handleSubmit} className="space-y-4">
+                <h2 className="text-3xl font-black text-agri-green-950 tracking-tight mb-1">
+                  {isLogin ? 'Bienvenido de nuevo' : 'Crea tu cuenta'}
+                </h2>
+                <p className="text-earth-500 text-sm mb-6">
+                  {isLogin ? 'Accede a tu panel de monitoreo' : 'Solo Gmail y Outlook permitidos'}
+                </p>
 
-            {/* Nombre */}
-            <AnimatePresence>
-              {!isLogin && (
-                <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }}
-                  exit={{ opacity: 0, height: 0 }} className="space-y-1.5 overflow-hidden">
-                  <label className="text-[10px] font-black text-earth-400 uppercase tracking-widest ml-1">Nombre completo</label>
-                  <input type="text" required value={displayName} onChange={(e) => setDisplayName(e.target.value)}
-                    placeholder="Ej. Carlos Aguirre"
-                    className="w-full bg-earth-200/20 border-2 border-earth-200 rounded-2xl px-4 py-3.5 text-sm outline-none focus:border-agri-green-500" />
-                </motion.div>
-              )}
-            </AnimatePresence>
+                {/* Tabs */}
+                <div className="flex gap-2 p-1.5 rounded-2xl mb-6"
+                  style={{ background:'rgba(0,0,0,0.08)', border:'1px solid rgba(0,0,0,0.06)' }}>
+                  {[{ label:'Iniciar Sesión', val:true }, { label:'Crear Cuenta', val:false }].map(({ label, val }) => (
+                    <button key={label} onClick={() => switchMode(val)}
+                      className="flex-1 py-2.5 text-sm font-bold rounded-xl transition-all"
+                      style={isLogin === val ? { background:'#16a34a', color:'#fff', boxShadow:'0 2px 8px rgba(22,163,74,0.4)' } : { color:'rgba(0,0,0,0.45)' }}>
+                      {label}
+                    </button>
+                  ))}
+                </div>
 
-            {/* Email */}
-            <div className="space-y-1.5">
-              <label className="text-[10px] font-black text-earth-400 uppercase tracking-widest ml-1">Correo electrónico</label>
-              <input type="email" required value={email} onChange={(e) => setEmail(e.target.value)}
-                placeholder="nombre@ejemplo.com"
-                className="w-full bg-earth-200/20 border-2 border-earth-200 rounded-2xl px-4 py-3.5 text-sm outline-none focus:border-agri-green-500" />
-            </div>
-
-            {/* Contraseña */}
-            <div className="space-y-1.5">
-              <label className="text-[10px] font-black text-earth-400 uppercase tracking-widest ml-1">Contraseña</label>
-              <div className="relative">
-                <input
-                  type={showPassword ? 'text' : 'password'}
-                  required
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  onFocus={() => setPwdFocused(true)}
-                  onBlur={() => setPwdFocused(false)}
-                  placeholder={isLogin ? 'Tu contraseña' : 'Mínimo 8 caracteres'}
-                  className="w-full bg-earth-200/20 border-2 border-earth-200 rounded-2xl pl-4 pr-12 py-3.5 text-sm outline-none focus:border-agri-green-500"
-                />
-                <button type="button" onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-4 top-1/2 -translate-y-1/2 text-earth-400 hover:text-earth-600">
-                  {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
-                </button>
-              </div>
-
-              {/* Indicador fortaleza — solo en registro */}
-              <AnimatePresence>
-                {!isLogin && (pwdFocused || password.length > 0) && (
-                  <motion.div
-                    initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0, y: -4 }} transition={{ duration: 0.2 }}
-                    className="mt-2 p-3.5 bg-earth-50 border border-earth-200 rounded-2xl space-y-3"
-                  >
-                    {password.length > 0 && (
-                      <div className="space-y-1">
-                        <div className="flex justify-between items-center">
-                          <span className="text-[10px] font-black text-earth-400 uppercase tracking-widest">Fortaleza</span>
-                          <span className={`text-[10px] font-black uppercase tracking-widest ${STRENGTH_TEXT[strength]}`}>
-                            {STRENGTH_LABELS[strength]}
-                          </span>
-                        </div>
-                        <div className="flex gap-1">
-                          {PASSWORD_RULES.map((_, i) => (
-                            <div key={i}
-                              className={`h-1.5 flex-1 rounded-full transition-all duration-300 ${i < strength ? STRENGTH_COLORS[strength] : 'bg-earth-200'}`}
-                            />
-                          ))}
-                        </div>
-                      </div>
+                <form onSubmit={handleSubmit} className="space-y-4">
+                  <AnimatePresence>
+                    {!isLogin && (
+                      <motion.div initial={{ opacity:0, height:0 }} animate={{ opacity:1, height:'auto' }}
+                        exit={{ opacity:0, height:0 }} className="overflow-hidden space-y-1.5">
+                        <label className="text-[10px] font-black text-agri-green-900 uppercase tracking-widest ml-1">Nombre completo</label>
+                        <input type="text" required value={displayName} onChange={e => setDisplayName(e.target.value)}
+                          placeholder="Ej. Carlos Aguirre"
+                          className="glass-input w-full rounded-2xl px-4 py-3.5 text-sm font-medium outline-none transition-all"
+                          style={inputStyle}
+                          onFocus={e => { e.target.style.border='1px solid rgba(22,163,74,0.8)'; e.target.style.background='rgba(255,255,255,0.75)'; }}
+                          onBlur={e  => { e.target.style.border='1px solid rgba(0,0,0,0.12)'; e.target.style.background='rgba(255,255,255,0.55)'; }}
+                        />
+                      </motion.div>
                     )}
-                    <div className="space-y-1.5">
-                      {PASSWORD_RULES.map((rule) => {
-                        const passed = rule.test(password);
-                        return (
-                          <div key={rule.id} className="flex items-center gap-2">
-                            {passed
-                              ? <CheckCircle2 size={13} className="text-agri-green-500 flex-shrink-0" />
-                              : <XCircle      size={13} className="text-earth-300 flex-shrink-0" />
-                            }
-                            <span className={`text-xs font-bold transition-colors ${passed ? 'text-agri-green-700' : 'text-earth-400'}`}>
-                              {rule.label}
-                            </span>
-                          </div>
-                        );
-                      })}
+                  </AnimatePresence>
+
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] font-black text-agri-green-900 uppercase tracking-widest ml-1">Correo electrónico</label>
+                    <input type="email" required value={email} onChange={e => setEmail(e.target.value)}
+                      placeholder="nombre@gmail.com"
+                      className="glass-input w-full rounded-2xl px-4 py-3.5 text-sm font-medium outline-none transition-all"
+                      style={inputStyle}
+                      onFocus={e => { e.target.style.border='1px solid rgba(22,163,74,0.8)'; e.target.style.background='rgba(255,255,255,0.75)'; }}
+                      onBlur={e  => { e.target.style.border='1px solid rgba(0,0,0,0.12)'; e.target.style.background='rgba(255,255,255,0.55)'; }}
+                    />
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] font-black text-agri-green-900 uppercase tracking-widest ml-1">Contraseña</label>
+                    <div className="relative">
+                      <input type={showPassword ? 'text' : 'password'} required value={password}
+                        onChange={e => setPassword(e.target.value)}
+                        onFocus={e => { setPwdFocused(true); e.target.style.border='1px solid rgba(22,163,74,0.8)'; e.target.style.background='rgba(255,255,255,0.75)'; }}
+                        onBlur={e  => { setPwdFocused(false); e.target.style.border='1px solid rgba(0,0,0,0.12)'; e.target.style.background='rgba(255,255,255,0.55)'; }}
+                        placeholder={isLogin ? 'Tu contraseña' : 'Mínimo 8 caracteres'}
+                        className="glass-input w-full rounded-2xl pl-4 pr-12 py-3.5 text-sm font-medium outline-none transition-all"
+                        style={inputStyle}
+                      />
+                      <button type="button" onClick={() => setShowPassword(!showPassword)}
+                        className="absolute right-4 top-1/2 -translate-y-1/2 text-agri-green-700/50 hover:text-agri-green-700">
+                        {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                      </button>
                     </div>
-                  </motion.div>
-                )}
-              </AnimatePresence>
-            </div>
 
-            {/* Error */}
-            <AnimatePresence>
-              {error && (
-                <motion.div initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
-                  className="p-3 bg-red-50 border border-red-200 rounded-xl flex gap-2 text-red-700 text-xs font-bold">
-                  <AlertCircle size={14} className="flex-shrink-0 mt-0.5" /> {error}
-                </motion.div>
-              )}
-            </AnimatePresence>
+                    <AnimatePresence>
+                      {!isLogin && (pwdFocused || password.length > 0) && (
+                        <motion.div initial={{ opacity:0, y:-4 }} animate={{ opacity:1, y:0 }} exit={{ opacity:0, y:-4 }}
+                          className="mt-2 p-3.5 rounded-2xl space-y-3"
+                          style={{ background:'rgba(255,255,255,0.5)', border:'1px solid rgba(0,0,0,0.08)' }}>
+                          {password.length > 0 && (
+                            <div className="space-y-1.5">
+                              <div className="flex justify-between">
+                                <span className="text-[10px] font-black text-agri-green-900/60 uppercase tracking-widest">Fortaleza</span>
+                                <span className={`text-[10px] font-black uppercase ${STRENGTH_TEXT[strength]}`}>{STRENGTH_LABELS[strength]}</span>
+                              </div>
+                              <div className="flex gap-1">
+                                {PASSWORD_RULES.map((_, i) => (
+                                  <div key={i} className={`h-1.5 flex-1 rounded-full transition-all ${i < strength ? STRENGTH_COLORS[strength] : 'bg-black/10'}`} />
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                          <div className="space-y-1.5">
+                            {PASSWORD_RULES.map(rule => {
+                              const ok = rule.test(password);
+                              return (
+                                <div key={rule.id} className="flex items-center gap-2">
+                                  {ok ? <CheckCircle2 size={12} className="text-agri-green-600 flex-shrink-0" />
+                                      : <XCircle      size={12} className="text-earth-300 flex-shrink-0" />}
+                                  <span className={`text-xs font-bold ${ok ? 'text-agri-green-700' : 'text-earth-400'}`}>{rule.label}</span>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+                  </div>
 
-            {/* Submit */}
-            <button type="submit" disabled={loading}
-              className="w-full bg-agri-green-800 text-white py-4 rounded-2xl font-black text-sm flex items-center justify-center gap-2 hover:bg-agri-green-900 disabled:opacity-50 transition-all active:scale-[0.98]">
-              {loading
-                ? <Loader2 className="animate-spin" size={18} />
-                : <>{isLogin ? 'Entrar al Panel' : 'Crear mi Cuenta'} <ArrowRight size={18} /></>
-              }
-            </button>
-          </form>
+                  <AnimatePresence>
+                    {error && (
+                      <motion.div initial={{ opacity:0, y:-4 }} animate={{ opacity:1, y:0 }} exit={{ opacity:0 }}
+                        className="p-3 rounded-xl flex gap-2 text-xs font-bold text-red-700"
+                        style={{ background:'rgba(254,226,226,0.9)', border:'1px solid rgba(239,68,68,0.4)' }}>
+                        <AlertCircle size={14} className="flex-shrink-0 mt-0.5" /> {error}
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+
+                  <button type="submit" disabled={loading}
+                    className="w-full py-4 rounded-2xl font-black text-sm flex items-center justify-center gap-2 text-white transition-all disabled:opacity-50"
+                    style={{ background:'#16a34a', boxShadow:'0 4px 24px rgba(22,163,74,0.3)' }}>
+                    {loading ? <Loader2 className="animate-spin" size={18} /> : <>{isLogin ? 'Entrar al Panel' : 'Crear mi Cuenta'} <ArrowRight size={18} /></>}
+                  </button>
+                </form>
+              </motion.div>
+            )}
+          </AnimatePresence>
         </div>
       </div>
     </div>
