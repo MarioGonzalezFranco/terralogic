@@ -17,7 +17,7 @@ const ALERT_LABELS: Record<AlertType, string> = { critical: 'Crítico', warning:
 interface AlertsPageProps {
   alerts:     AlertItem[];
   setAlerts:  React.Dispatch<React.SetStateAction<AlertItem[]>>;
-  onNavigate: (tab: TabId) => void;
+  onNavigate: (tab: TabId, field?: string) => void;
 }
 
 export default function AlertsPage({ alerts, setAlerts, onNavigate }: AlertsPageProps) {
@@ -72,7 +72,7 @@ export default function AlertsPage({ alerts, setAlerts, onNavigate }: AlertsPage
       await markAlertRead(alert.id);
       setAlerts(prev => prev.map(a => a.id === alert.id ? { ...a, is_read: true } : a));
     }
-    onNavigate('fields');
+    onNavigate('fields', alert.field);
   };
 
   const confirmAlert = alerts.find(a => a.id === confirmId);

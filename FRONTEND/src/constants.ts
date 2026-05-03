@@ -1,12 +1,13 @@
 import { NavItem, Metric, Field, AnalysisRecord, Alert } from './types';
 
 export const NAV_ITEMS: NavItem[] = [
-  { id: 'dashboard', label: 'Estadísticas', icon: 'LayoutDashboard' },
-  { id: 'fields',    label: 'Campos',        icon: 'Sprout'          },
-  { id: 'analysis',  label: 'Análisis',      icon: 'Microscope'      },
-  { id: 'history',   label: 'Historial',     icon: 'History'         },
-  { id: 'alerts',    label: 'Alertas',       icon: 'BellRing'        },
-  { id: 'settings',  label: 'Configuración', icon: 'Settings'        },
+  { id: 'dashboard', label: 'Estadísticas',   icon: 'LayoutDashboard' },
+  { id: 'fields',    label: 'Campos',          icon: 'Sprout'          },
+  { id: 'analysis',  label: 'Análisis',        icon: 'Microscope'      },
+  { id: 'history',   label: 'Historial',       icon: 'History'         },
+  { id: 'alerts',    label: 'Alertas',         icon: 'BellRing'        },
+  { id: 'calendar',  label: 'Calendario',      icon: 'CalendarDays'    },
+  { id: 'settings',  label: 'Configuración',   icon: 'Settings'        },
 ];
 
 export const DASHBOARD_METRICS: Metric[] = [

@@ -1,7 +1,7 @@
-// FRONTEND/src/type.ts
+// FRONTEND/src/types.ts
 
 // --- Tipos de Interfaz de Usuario ---
-export type TabId = 'dashboard' | 'fields' | 'analysis' | 'history' | 'alerts' | 'settings';
+export type TabId = 'dashboard' | 'fields' | 'analysis' | 'history' | 'alerts' | 'settings' | 'calendar';
 
 export interface NavItem {
     id: TabId;
@@ -76,20 +76,13 @@ export interface UserProfile {
     createdAt: string;
 }
 
-/**
- * Interface para el envío de datos al Backend en el registro.
- * El backend en Python espera 'display_name' para mapear a la DB.
- */
 export interface UserCreate {
     email: string;
-    password: string; // Usamos str para ser consistentes con FastAPI
+    password: string;
     display_name: string;
-    role?: UserRole; // Opcional, el backend puede asignar 'productor' por defecto
+    role?: UserRole;
 }
 
-/**
- * Respuesta estándar del servidor tras Login o Registro exitoso.
- */
 export interface AuthResponse {
     user: UserProfile;
     access_token: string;

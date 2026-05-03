@@ -322,3 +322,52 @@ def change_password(
     current_user.password_hash = get_password_hash(payload.new_password)
     db.commit()
     return {"message": "Contraseña actualizada. Por favor inicia sesión nuevamente."}
+
+
+# ── Recuperación de contraseña ────────────────────────────────
+
+class ForgotPasswordPayload(BaseModel):
+    email: str
+
+class ResetPasswordPayload(BaseModel):
+    email:        str
+    code:         str
+    new_password: str
+
+@router.post("/forgot-password")
+@limiter.limit("3/minute")
+async def forgot_password(request: Request, payload: ForgotPasswordPayload, db: Session = Depends(get_db)):
+    """Envía código OTP al correo para recuperar contraseña."""
+    user = db.query(User).filter(User.email == payload.email.strip().lower()).first()
+
+    # Por seguridad siempre responder igual aunque no exista el usuario
+    if user:
+        otp_code = generate_otp(f"reset_{user.email}")
+        send_otp_email(
+            to_email=user.email,
+            display_name=user.display_name or "Usuario",
+            otp_code=otp_code,
+        )
+
+    return {"message": "Si el correo está registrado, recibirás un código para restablecer tu contraseña."}
+
+
+@router.post("/reset-password")
+def reset_password(payload: ResetPasswordPayload, db: Session = Depends(get_db)):
+    """Verifica el OTP y actualiza la contraseña."""
+    valid, msg = verify_otp(f"reset_{payload.email.strip().lower()}", payload.code)
+    if not valid:
+        raise HTTPException(status_code=400, detail=msg)
+
+    valid_pwd, pwd_msg = validate_password_strength(payload.new_password)
+    if not valid_pwd:
+        raise HTTPException(status_code=400, detail=pwd_msg)
+
+    user = db.query(User).filter(User.email == payload.email.strip().lower()).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Usuario no encontrado.")
+
+    user.password_hash = get_password_hash(payload.new_password)
+    db.commit()
+
+    return {"message": "Contraseña actualizada correctamente. Ya puedes iniciar sesión."}

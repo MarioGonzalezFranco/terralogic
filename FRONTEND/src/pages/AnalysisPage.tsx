@@ -1,9 +1,10 @@
-import { useState, useRef, type DragEvent, type ChangeEvent } from 'react';
+import { useState, useRef, useCallback, type DragEvent, type ChangeEvent, type WheelEvent, type MouseEvent } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   Upload, FileText, Droplets, Bug, Loader2,
   ImageOff, X, CheckCircle, ChevronDown, Plus,
   Leaf, ShieldAlert, Sprout, Activity,
+  ZoomIn, ZoomOut, Maximize2, Move,
 } from 'lucide-react';
 import { PageHeader } from '../components/ui';
 import { RECENT_FIELDS } from '../constants';
@@ -12,6 +13,8 @@ import { saveAnalysis } from '../services/history.service';
 const ACCEPTED_FORMATS = ['JPG', 'PNG', 'WEBP'];
 const ACCEPTED_MIME    = 'image/jpeg,image/png,image/webp';
 const API_URL          = 'http://127.0.0.1:8000/api/v1';
+const MIN_ZOOM = 1;
+const MAX_ZOOM = 5;
 
 interface GeminiResult {
   field_name:        string;
@@ -42,9 +45,56 @@ export default function AnalysisPage({ onNotify, onAnalysisComplete }: AnalysisP
   const [aiResult,      setAiResult]      = useState<GeminiResult | null>(null);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
 
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  // ── Estado del zoom interactivo ───────────────────────────
+  const [zoom,      setZoom]      = useState(1);
+  const [panX,      setPanX]      = useState(0);
+  const [panY,      setPanY]      = useState(0);
+  const [isPanning, setIsPanning] = useState(false);
+  const [lastMouse, setLastMouse] = useState({ x: 0, y: 0 });
+  const imageContainerRef = useRef<HTMLDivElement>(null);
+  const fileInputRef      = useRef<HTMLInputElement>(null);
+
   const effectiveField = fieldMode === 'existing' ? selectedField : customField.trim();
 
+  // ── Zoom con rueda del mouse ──────────────────────────────
+  const handleWheel = useCallback((e: WheelEvent<HTMLDivElement>) => {
+    if (!uploadedImage) return;
+    e.preventDefault();
+    const delta    = e.deltaY > 0 ? -0.2 : 0.2;
+    const newZoom  = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, zoom + delta));
+    if (newZoom === MIN_ZOOM) { setPanX(0); setPanY(0); }
+    setZoom(newZoom);
+  }, [zoom, uploadedImage]);
+
+  // ── Arrastrar imagen ──────────────────────────────────────
+  const handleMouseDown = (e: MouseEvent<HTMLDivElement>) => {
+    if (zoom <= 1) return;
+    setIsPanning(true);
+    setLastMouse({ x: e.clientX, y: e.clientY });
+  };
+
+  const handleMouseMove = (e: MouseEvent<HTMLDivElement>) => {
+    if (!isPanning || zoom <= 1) return;
+    const dx = e.clientX - lastMouse.x;
+    const dy = e.clientY - lastMouse.y;
+    setPanX(prev => prev + dx);
+    setPanY(prev => prev + dy);
+    setLastMouse({ x: e.clientX, y: e.clientY });
+  };
+
+  const handleMouseUp   = () => setIsPanning(false);
+  const handleMouseLeave = () => setIsPanning(false);
+
+  // ── Botones de zoom ───────────────────────────────────────
+  const zoomIn  = () => setZoom(z => Math.min(MAX_ZOOM, parseFloat((z + 0.5).toFixed(1))));
+  const zoomOut = () => {
+    const newZoom = Math.max(MIN_ZOOM, parseFloat((zoom - 0.5).toFixed(1)));
+    if (newZoom === MIN_ZOOM) { setPanX(0); setPanY(0); }
+    setZoom(newZoom);
+  };
+  const resetZoom = () => { setZoom(1); setPanX(0); setPanY(0); };
+
+  // ── Helpers ───────────────────────────────────────────────
   const handleZoneClick = () => {
     if (!effectiveField) { onNotify('Selecciona o escribe el nombre del campo primero.'); return; }
     if (!isAnalyzing) fileInputRef.current?.click();
@@ -59,10 +109,19 @@ export default function AnalysisPage({ onNotify, onAnalysisComplete }: AnalysisP
     setAiResult(null);
     setAnalysisError(null);
 
-    // Preview local inmediato
+    // Leer imagen como base64 — persiste en localStorage entre sesiones
+    let imageBase64 = '';
     const reader = new FileReader();
-    reader.onload = (e) => setUploadedImage(e.target?.result as string);
+    reader.onload = (e) => {
+      imageBase64 = e.target?.result as string;
+      setUploadedImage(imageBase64);
+    };
     reader.readAsDataURL(file);
+
+    // Esperar a que el FileReader termine antes de continuar
+    await new Promise<void>(resolve => {
+      reader.onloadend = () => resolve();
+    });
 
     try {
       const formData = new FormData();
@@ -71,9 +130,9 @@ export default function AnalysisPage({ onNotify, onAnalysisComplete }: AnalysisP
 
       const token = sessionStorage.getItem('token');
       const response = await fetch(`${API_URL}/analysis/analyze`, {
-        method: 'POST',
+        method:  'POST',
         headers: token ? { Authorization: `Bearer ${token}` } : {},
-        body: formData,
+        body:    formData,
       });
 
       if (!response.ok) {
@@ -84,7 +143,6 @@ export default function AnalysisPage({ onNotify, onAnalysisComplete }: AnalysisP
       const result: GeminiResult = await response.json();
       setAiResult(result);
 
-      // Guardar automáticamente en el historial
       try {
         await saveAnalysis({
           field_name:        result.field_name,
@@ -98,11 +156,18 @@ export default function AnalysisPage({ onNotify, onAnalysisComplete }: AnalysisP
           confianza:         result.confianza,
         });
       } catch {
-        // Si falla el guardado no interrumpimos la experiencia
         console.warn('No se pudo guardar en el historial.');
       }
 
-      onAnalysisComplete(URL.createObjectURL(file), effectiveField, result);
+      // Guardar imagen base64 en localStorage para persistencia entre sesiones
+      try {
+        if (imageBase64 && imageBase64.length < 800000) {
+          localStorage.setItem('lastAnalysisImage',      imageBase64);
+          localStorage.setItem('lastAnalysisImageField', effectiveField);
+        }
+      } catch { /* localStorage lleno — ignorar */ }
+
+      onAnalysisComplete(imageBase64, effectiveField, result);
       onNotify(`Análisis de ${effectiveField} completado — ${result.resultado}`);
 
     } catch (err: any) {
@@ -132,49 +197,32 @@ export default function AnalysisPage({ onNotify, onAnalysisComplete }: AnalysisP
     setFileName(null);
     setAiResult(null);
     setAnalysisError(null);
+    resetZoom();
   };
 
   const handleGeneratePDF = async () => {
     if (!uploadedImage || !aiResult) return;
     setIsGenerating(true);
-
     try {
-      const base64 = uploadedImage.includes(',')
-        ? uploadedImage.split(',')[1]
-        : uploadedImage;
-
-      const token = sessionStorage.getItem('token');
+      const base64 = uploadedImage.includes(',') ? uploadedImage.split(',')[1] : uploadedImage;
+      const token  = sessionStorage.getItem('token');
       const response = await fetch(`${API_URL}/reports/generate`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
         body: JSON.stringify({
-          field_name:        aiResult.field_name,
-          resultado:         aiResult.resultado,
-          ndvi:              aiResult.ndvi,
-          cobertura_vegetal: aiResult.cobertura_vegetal,
-          enfermedades:      aiResult.enfermedades,
-          estres_hidrico:    aiResult.estres_hidrico,
-          plagas:            aiResult.plagas,
-          insight:           aiResult.insight,
-          confianza:         aiResult.confianza,
-          image_base64:      base64,
-          image_mime:        'image/jpeg',
+          field_name: aiResult.field_name, resultado: aiResult.resultado,
+          ndvi: aiResult.ndvi, cobertura_vegetal: aiResult.cobertura_vegetal,
+          enfermedades: aiResult.enfermedades, estres_hidrico: aiResult.estres_hidrico,
+          plagas: aiResult.plagas, insight: aiResult.insight, confianza: aiResult.confianza,
+          image_base64: base64, image_mime: 'image/jpeg',
         }),
       });
-
       if (!response.ok) throw new Error('Error al generar el PDF');
-
       const blob = await response.blob();
       const url  = URL.createObjectURL(blob);
       const a    = document.createElement('a');
-      a.href     = url;
-      a.download = `reporte-${aiResult.field_name.replace(/\s+/g, '-').toLowerCase()}.pdf`;
-      a.click();
+      a.href = url; a.download = `reporte-${aiResult.field_name.replace(/\s+/g, '-').toLowerCase()}.pdf`; a.click();
       URL.revokeObjectURL(url);
-
       onNotify('Reporte PDF generado y descargado correctamente.');
     } catch {
       onNotify('Error al generar el PDF. Intenta de nuevo.');
@@ -183,13 +231,8 @@ export default function AnalysisPage({ onNotify, onAnalysisComplete }: AnalysisP
     }
   };
 
-  const selectedFieldData = fieldMode === 'existing'
-    ? RECENT_FIELDS.find(f => f.id === selectedField)
-    : null;
-
-  const switchMode = (mode: 'existing' | 'new') => {
-    setFieldMode(mode); setSelectedField(''); setCustomField(''); handleClear();
-  };
+  const selectedFieldData = fieldMode === 'existing' ? RECENT_FIELDS.find(f => f.id === selectedField) : null;
+  const switchMode = (mode: 'existing' | 'new') => { setFieldMode(mode); setSelectedField(''); setCustomField(''); handleClear(); };
 
   const resultColor = {
     'Saludable': { bg: 'bg-agri-green-50', border: 'border-agri-green-200', text: 'text-agri-green-700', badge: 'bg-agri-green-100 text-agri-green-700' },
@@ -197,6 +240,8 @@ export default function AnalysisPage({ onNotify, onAnalysisComplete }: AnalysisP
     'Estrés':    { bg: 'bg-red-50',        border: 'border-red-200',        text: 'text-red-700',        badge: 'bg-red-100 text-red-700'               },
   };
   const colors = aiResult ? resultColor[aiResult.resultado] : resultColor['Saludable'];
+
+  const zoomPct = Math.round(zoom * 100);
 
   return (
     <div className="space-y-10">
@@ -219,7 +264,6 @@ export default function AnalysisPage({ onNotify, onAnalysisComplete }: AnalysisP
                 <p className="text-xs font-bold text-earth-400 mt-0.5">Elige un sector existente o escribe un nombre nuevo</p>
               </div>
             </div>
-
             <div className="flex gap-2 p-1.5 bg-earth-200/40 rounded-2xl mb-6">
               <button onClick={() => switchMode('existing')}
                 className={`flex-1 py-3 text-sm font-bold rounded-xl transition-all duration-300 ${fieldMode === 'existing' ? 'bg-white text-agri-green-800 shadow-md' : 'text-earth-500 hover:text-earth-700'}`}>
@@ -230,7 +274,6 @@ export default function AnalysisPage({ onNotify, onAnalysisComplete }: AnalysisP
                 <Plus size={14} strokeWidth={3} /> Nuevo campo
               </button>
             </div>
-
             <AnimatePresence mode="wait">
               {fieldMode === 'existing' ? (
                 <motion.div key="existing" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }}>
@@ -275,7 +318,6 @@ export default function AnalysisPage({ onNotify, onAnalysisComplete }: AnalysisP
             </AnimatePresence>
           </motion.div>
 
-          {/* Input oculto */}
           <input ref={fileInputRef} type="file" accept={ACCEPTED_MIME} onChange={handleFileChange} className="hidden" />
 
           {/* PASO 2: Subir imagen */}
@@ -318,22 +360,115 @@ export default function AnalysisPage({ onNotify, onAnalysisComplete }: AnalysisP
             </div>
           </motion.div>
 
-          {/* Visor de imagen */}
+          {/* PASO 3: Visor con zoom interactivo */}
           <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }}
             className="bg-white rounded-[2.5rem] overflow-hidden border border-earth-200 shadow-2xl shadow-earth-900/10">
-            <div className="aspect-video bg-earth-100/50 relative group">
+
+            {/* Contenedor de imagen con zoom */}
+            <div className="relative bg-earth-100/50 overflow-hidden"
+              ref={imageContainerRef}
+              onWheel={handleWheel}
+              onMouseDown={handleMouseDown}
+              onMouseMove={handleMouseMove}
+              onMouseUp={handleMouseUp}
+              onMouseLeave={handleMouseLeave}
+              style={{
+                height:     '420px',
+                cursor:     uploadedImage ? (zoom > 1 ? (isPanning ? 'grabbing' : 'grab') : 'zoom-in') : 'default',
+                userSelect: 'none',
+              }}
+            >
               {uploadedImage ? (
                 <>
-                  <img src={uploadedImage} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-1000 opacity-95" alt="Imagen analizada" />
-                  <div className="absolute inset-0 bg-gradient-to-tr from-agri-green-500/20 via-transparent to-red-500/10 mix-blend-overlay" />
-                  <button onClick={handleClear} className="absolute top-6 right-6 w-10 h-10 bg-white/90 backdrop-blur-xl rounded-xl flex items-center justify-center text-earth-600 hover:text-red-600 shadow-xl transition-colors">
-                    <X size={18} />
-                  </button>
+                  {/* Imagen con transformación de zoom y pan */}
+                  <img
+                    src={uploadedImage}
+                    alt="Imagen analizada"
+                    draggable={false}
+                    style={{
+                      width:     '100%',
+                      height:    '100%',
+                      objectFit: 'cover',
+                      transform: `scale(${zoom}) translate(${panX / zoom}px, ${panY / zoom}px)`,
+                      transformOrigin: 'center center',
+                      transition: isPanning ? 'none' : 'transform 0.15s ease-out',
+                      opacity: 0.95,
+                    }}
+                  />
+
+                  {/* Overlay de diagnóstico */}
+                  <div className="absolute inset-0 bg-gradient-to-tr from-agri-green-500/20 via-transparent to-red-500/10 mix-blend-overlay pointer-events-none" />
+
+                  {/* Badge resultado */}
                   {aiResult && (
-                    <div className="absolute top-6 left-6">
+                    <div className="absolute top-4 left-4 pointer-events-none">
                       <span className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest shadow-xl ${colors.badge}`}>
                         {aiResult.resultado} — NDVI {aiResult.ndvi.toFixed(2)}
                       </span>
+                    </div>
+                  )}
+
+                  {/* Botón cerrar */}
+                  <button onClick={handleClear}
+                    className="absolute top-4 right-4 w-10 h-10 bg-white/90 backdrop-blur-xl rounded-xl flex items-center justify-center text-earth-600 hover:text-red-600 shadow-xl transition-colors z-10">
+                    <X size={18} />
+                  </button>
+
+                  {/* ── Controles de zoom ── */}
+                  <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex items-center gap-2 z-10">
+                    <div className="flex items-center gap-1 px-3 py-2 rounded-2xl shadow-xl"
+                      style={{ background: 'rgba(255,255,255,0.92)', backdropFilter: 'blur(12px)', border: '1px solid rgba(0,0,0,0.08)' }}>
+
+                      {/* Zoom out */}
+                      <button onClick={zoomOut} disabled={zoom <= MIN_ZOOM}
+                        className="w-8 h-8 rounded-xl flex items-center justify-center text-earth-600 hover:bg-agri-green-50 hover:text-agri-green-700 disabled:opacity-30 transition-all">
+                        <ZoomOut size={16} />
+                      </button>
+
+                      {/* Barra de progreso del zoom */}
+                      <div className="flex items-center gap-2 px-2">
+                        <div className="w-20 h-1.5 bg-earth-200 rounded-full overflow-hidden">
+                          <div className="h-full bg-agri-green-500 rounded-full transition-all duration-200"
+                            style={{ width: `${((zoom - MIN_ZOOM) / (MAX_ZOOM - MIN_ZOOM)) * 100}%` }} />
+                        </div>
+                        <span className="text-[11px] font-black text-earth-600 min-w-[36px]">{zoomPct}%</span>
+                      </div>
+
+                      {/* Zoom in */}
+                      <button onClick={zoomIn} disabled={zoom >= MAX_ZOOM}
+                        className="w-8 h-8 rounded-xl flex items-center justify-center text-earth-600 hover:bg-agri-green-50 hover:text-agri-green-700 disabled:opacity-30 transition-all">
+                        <ZoomIn size={16} />
+                      </button>
+
+                      {/* Separador */}
+                      <div className="w-px h-5 bg-earth-200 mx-1" />
+
+                      {/* Reset zoom */}
+                      <button onClick={resetZoom} disabled={zoom === MIN_ZOOM}
+                        className="w-8 h-8 rounded-xl flex items-center justify-center text-earth-600 hover:bg-agri-green-50 hover:text-agri-green-700 disabled:opacity-30 transition-all"
+                        title="Restablecer zoom">
+                        <Maximize2 size={15} />
+                      </button>
+                    </div>
+
+                    {/* Indicador de arrastre */}
+                    {zoom > 1 && (
+                      <div className="flex items-center gap-1.5 px-3 py-2 rounded-2xl text-[11px] font-bold text-earth-500"
+                        style={{ background: 'rgba(255,255,255,0.85)', backdropFilter: 'blur(8px)', border: '1px solid rgba(0,0,0,0.06)' }}>
+                        <Move size={12} />
+                        Arrastra para explorar
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Instrucción inicial de zoom */}
+                  {zoom === 1 && aiResult && (
+                    <div className="absolute bottom-4 right-4 pointer-events-none">
+                      <div className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-[10px] font-bold text-earth-500"
+                        style={{ background: 'rgba(255,255,255,0.85)', backdropFilter: 'blur(8px)', border: '1px solid rgba(0,0,0,0.06)' }}>
+                        <ZoomIn size={11} />
+                        Rueda del mouse para zoom
+                      </div>
                     </div>
                   )}
                 </>
@@ -344,6 +479,8 @@ export default function AnalysisPage({ onNotify, onAnalysisComplete }: AnalysisP
                 </div>
               )}
             </div>
+
+            {/* Barra inferior del visor */}
             <div className="p-8 flex justify-between items-center bg-white/30 flex-wrap gap-4">
               <div className="flex gap-8 items-center flex-wrap">
                 {fileName && (
@@ -378,7 +515,6 @@ export default function AnalysisPage({ onNotify, onAnalysisComplete }: AnalysisP
           <div className="bg-white p-8 rounded-[2.5rem] border border-earth-200 shadow-xl shadow-earth-900/5 sticky top-24">
             <h2 className="text-2xl font-black text-agri-green-950 tracking-tight mb-8">Resultados IA</h2>
 
-            {/* Estado vacío */}
             {!uploadedImage && !isAnalyzing && (
               <div className="flex flex-col items-center justify-center py-10 text-center">
                 <div className="w-14 h-14 rounded-2xl bg-earth-100 flex items-center justify-center text-earth-300 mb-4"><Bug size={28} /></div>
@@ -388,7 +524,6 @@ export default function AnalysisPage({ onNotify, onAnalysisComplete }: AnalysisP
               </div>
             )}
 
-            {/* Analizando */}
             {isAnalyzing && (
               <div className="flex flex-col items-center justify-center py-10 text-center">
                 <Loader2 className="animate-spin text-agri-green-600 mb-4" size={36} />
@@ -397,18 +532,12 @@ export default function AnalysisPage({ onNotify, onAnalysisComplete }: AnalysisP
               </div>
             )}
 
-            {/* Error */}
             {analysisError && !isAnalyzing && (
-              <div className="p-4 bg-red-50 border border-red-200 rounded-2xl text-red-700 text-sm font-bold">
-                {analysisError}
-              </div>
+              <div className="p-4 bg-red-50 border border-red-200 rounded-2xl text-red-700 text-sm font-bold">{analysisError}</div>
             )}
 
-            {/* Resultados reales de Gemini */}
             {aiResult && !isAnalyzing && (
               <div className="space-y-4">
-
-                {/* Resultado general */}
                 <div className={`p-4 ${colors.bg} border ${colors.border} rounded-2xl`}>
                   <p className="text-[10px] font-black uppercase tracking-widest mb-1 opacity-60">Diagnóstico general</p>
                   <div className="flex items-center justify-between">
@@ -417,21 +546,17 @@ export default function AnalysisPage({ onNotify, onAnalysisComplete }: AnalysisP
                   </div>
                 </div>
 
-                {/* Campo */}
                 <div className="p-4 bg-agri-green-50 border border-agri-green-100 rounded-2xl">
                   <p className="text-[10px] font-black text-agri-green-600 uppercase tracking-widest mb-1">Campo analizado</p>
                   <p className="font-black text-agri-green-950 text-sm">{aiResult.field_name}</p>
                 </div>
 
-                {/* Enfermedades */}
                 <div className="p-5 bg-white rounded-2xl flex justify-between items-center border border-earth-100">
                   <div className="flex items-center gap-3">
                     <div className="p-2.5 bg-agri-green-100 text-agri-green-600 rounded-xl"><Bug size={20} /></div>
                     <div>
                       <p className="text-sm font-black text-earth-700">Enfermedades</p>
-                      {aiResult.enfermedades.count > 0 && (
-                        <p className="text-[10px] text-earth-400 font-medium">{aiResult.enfermedades.detalle}</p>
-                      )}
+                      {aiResult.enfermedades.count > 0 && <p className="text-[10px] text-earth-400 font-medium">{aiResult.enfermedades.detalle}</p>}
                     </div>
                   </div>
                   <span className={`text-3xl font-black tracking-tighter ${aiResult.enfermedades.count > 0 ? 'text-red-600' : 'text-agri-green-600'}`}>
@@ -439,37 +564,29 @@ export default function AnalysisPage({ onNotify, onAnalysisComplete }: AnalysisP
                   </span>
                 </div>
 
-                {/* Estrés hídrico */}
                 <div className="p-5 bg-white rounded-2xl border border-earth-100">
                   <div className="flex justify-between items-center mb-3">
                     <div className="flex items-center gap-3">
                       <div className="p-2.5 bg-orange-100 text-orange-600 rounded-xl"><Droplets size={20} /></div>
                       <p className="text-sm font-black text-earth-700">Estrés Hídrico</p>
                     </div>
-                    <span className={`text-3xl font-black tracking-tighter ${
-                      aiResult.estres_hidrico.porcentaje > 50 ? 'text-red-600' :
-                      aiResult.estres_hidrico.porcentaje > 25 ? 'text-orange-600' : 'text-agri-green-600'}`}>
+                    <span className={`text-3xl font-black tracking-tighter ${aiResult.estres_hidrico.porcentaje > 50 ? 'text-red-600' : aiResult.estres_hidrico.porcentaje > 25 ? 'text-orange-600' : 'text-agri-green-600'}`}>
                       {aiResult.estres_hidrico.porcentaje}%
                     </span>
                   </div>
                   <div className="w-full bg-earth-100 rounded-full h-1.5">
-                    <div className={`h-1.5 rounded-full transition-all duration-700 ${
-                      aiResult.estres_hidrico.porcentaje > 50 ? 'bg-red-500' :
-                      aiResult.estres_hidrico.porcentaje > 25 ? 'bg-orange-500' : 'bg-agri-green-500'}`}
+                    <div className={`h-1.5 rounded-full transition-all duration-700 ${aiResult.estres_hidrico.porcentaje > 50 ? 'bg-red-500' : aiResult.estres_hidrico.porcentaje > 25 ? 'bg-orange-500' : 'bg-agri-green-500'}`}
                       style={{ width: `${aiResult.estres_hidrico.porcentaje}%` }} />
                   </div>
                   <p className="text-[10px] text-earth-400 font-bold mt-1.5">Nivel: {aiResult.estres_hidrico.nivel}</p>
                 </div>
 
-                {/* Plagas */}
                 <div className="p-5 bg-white rounded-2xl flex justify-between items-center border border-earth-100">
                   <div className="flex items-center gap-3">
                     <div className="p-2.5 bg-red-100 text-red-600 rounded-xl"><ShieldAlert size={20} /></div>
                     <div>
                       <p className="text-sm font-black text-earth-700">Plagas</p>
-                      {aiResult.plagas.count > 0 && (
-                        <p className="text-[10px] text-earth-400 font-medium">{aiResult.plagas.detalle}</p>
-                      )}
+                      {aiResult.plagas.count > 0 && <p className="text-[10px] text-earth-400 font-medium">{aiResult.plagas.detalle}</p>}
                     </div>
                   </div>
                   <span className={`text-3xl font-black tracking-tighter ${aiResult.plagas.count > 0 ? 'text-red-600' : 'text-agri-green-600'}`}>
@@ -477,7 +594,6 @@ export default function AnalysisPage({ onNotify, onAnalysisComplete }: AnalysisP
                   </span>
                 </div>
 
-                {/* NDVI + Cobertura */}
                 <div className="grid grid-cols-2 gap-3">
                   <div className="p-4 bg-white rounded-2xl border border-earth-100 text-center">
                     <div className="flex justify-center mb-2"><Leaf size={18} className="text-agri-green-600" /></div>
@@ -491,18 +607,14 @@ export default function AnalysisPage({ onNotify, onAnalysisComplete }: AnalysisP
                   </div>
                 </div>
 
-                {/* Insight de Gemini */}
                 <div className="p-6 bg-agri-green-950 text-white rounded-[2rem] shadow-2xl relative overflow-hidden">
                   <div className="absolute -right-4 -top-4 w-24 h-24 bg-agri-green-500/10 rounded-full blur-2xl" />
                   <div className="flex items-center gap-2 mb-3">
                     <Sprout size={14} className="text-agri-green-400" />
                     <p className="text-[10px] font-black uppercase tracking-[0.2em] text-agri-green-400">Insight de Gemini</p>
                   </div>
-                  <p className="text-sm font-medium italic leading-relaxed opacity-90">
-                    "{aiResult.insight}"
-                  </p>
+                  <p className="text-sm font-medium italic leading-relaxed opacity-90">"{aiResult.insight}"</p>
                 </div>
-
               </div>
             )}
           </div>

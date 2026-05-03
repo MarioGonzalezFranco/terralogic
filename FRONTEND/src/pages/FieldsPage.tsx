@@ -19,10 +19,11 @@ const STATUS_FILTERS: { label: string; value: FieldStatusFilter }[] = [
 ];
 
 interface FieldsPageProps {
-  onNavigate: (tab: TabId) => void;
+  onNavigate:    (tab: TabId) => void;
+  initialField?: string | null;
 }
 
-export default function FieldsPage({ onNavigate }: FieldsPageProps) {
+export default function FieldsPage({ onNavigate, initialField }: FieldsPageProps) {
   const [fields,        setFields]        = useState<FieldItem[]>([]);
   const [stats,         setStats]         = useState<FieldsStats>({ total: 0, healthy: 0, attention: 0, critical: 0 });
   const [loading,       setLoading]       = useState(true);
@@ -46,6 +47,21 @@ export default function FieldsPage({ onNavigate }: FieldsPageProps) {
   };
 
   useEffect(() => { fetchFields(); }, []);
+
+  // Auto-seleccionar campo cuando viene desde una alerta
+  useEffect(() => {
+    if (initialField && fields.length > 0) {
+      const match = fields.find(f =>
+        f.name.toLowerCase() === initialField.toLowerCase() ||
+        f.name.toLowerCase().includes(initialField.toLowerCase())
+      );
+      if (match) {
+        setSelectedField(match);
+        setSearch(initialField);
+        sessionStorage.removeItem('alertField');
+      }
+    }
+  }, [initialField, fields]);
 
   const filteredFields = fields.filter((f) => {
     const matchSearch = f.name.toLowerCase().includes(search.toLowerCase()) ||

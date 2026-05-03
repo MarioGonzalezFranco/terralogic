@@ -1,8 +1,11 @@
 # app/core/email_service.py
-import os
 import smtplib
+import os
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from dotenv import load_dotenv
+
+load_dotenv()
 
 GMAIL_USER     = os.getenv("GMAIL_USER", "")
 GMAIL_PASSWORD = os.getenv("GMAIL_PASSWORD", "")

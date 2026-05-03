@@ -158,6 +158,222 @@ function OTPScreen({ email, onSuccess }: { email: string; onSuccess: (token: str
 }
 
 // ── Página principal de autenticación ─────────────────────────
+// ── Pantalla de recuperación de contraseña ───────────────────
+type ForgotStep = 'email' | 'otp' | 'newpassword' | 'done';
+
+function ForgotPasswordScreen({ onBack }: { onBack: () => void }) {
+  const [step,        setStep]        = useState<ForgotStep>('email');
+  const [email,       setEmail]       = useState('');
+  const [digits,      setDigits]      = useState(['','','','','','']);
+  const [newPassword, setNewPassword] = useState('');
+  const [showPwd,     setShowPwd]     = useState(false);
+  const [loading,     setLoading]     = useState(false);
+  const [error,       setError]       = useState<string | null>(null);
+  const refs = [useRef<HTMLInputElement>(null), useRef<HTMLInputElement>(null), useRef<HTMLInputElement>(null),
+                useRef<HTMLInputElement>(null), useRef<HTMLInputElement>(null), useRef<HTMLInputElement>(null)];
+
+  const strength  = getStrength(newPassword);
+  const allPassed = strength === PASSWORD_RULES.length;
+
+  const inputStyle = {
+    background: 'rgba(255,255,255,0.55)', border: '1px solid rgba(0,0,0,0.12)',
+    backdropFilter: 'blur(8px)', color: '#1a2e1a',
+  };
+
+  // Paso 1 — Enviar OTP al correo
+  const handleSendOTP = async () => {
+    if (!isValidEmail(email)) { setError('Ingresa un correo válido.'); return; }
+    setLoading(true); setError(null);
+    try {
+      const res = await fetch(`${API_URL}/auth/forgot-password`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email }),
+      });
+      if (res.ok) setStep('otp');
+      else { const d = await res.json(); setError(d.detail || 'Error al enviar el código.'); }
+    } catch { setError('Error de conexión.'); }
+    finally { setLoading(false); }
+  };
+
+  // Paso 2 — Verificar OTP
+  const handleVerifyOTP = async () => {
+    const code = digits.join('');
+    if (code.length < 6) { setError('Ingresa los 6 dígitos.'); return; }
+    setError(null);
+    setStep('newpassword');
+  };
+
+  // Paso 3 — Cambiar contraseña
+  const handleReset = async () => {
+    if (!allPassed) { setError('La contraseña no cumple los requisitos.'); return; }
+    setLoading(true); setError(null);
+    try {
+      const res = await fetch(`${API_URL}/auth/reset-password`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, code: digits.join(''), new_password: newPassword }),
+      });
+      const data = await res.json();
+      if (res.ok) setStep('done');
+      else setError(data.detail || 'Error al cambiar la contraseña.');
+    } catch { setError('Error de conexión.'); }
+    finally { setLoading(false); }
+  };
+
+  const handleDigitChange = (i: number, val: string) => {
+    if (!/^\d*$/.test(val)) return;
+    const d = [...digits]; d[i] = val.slice(-1); setDigits(d); setError(null);
+    if (val && i < 5) refs[i+1].current?.focus();
+  };
+
+  const handleDigitKey = (i: number, e: React.KeyboardEvent) => {
+    if (e.key === 'Backspace' && !digits[i] && i > 0) refs[i-1].current?.focus();
+  };
+
+  const cardStyle = {
+    background: 'rgba(240,248,240,0.88)', backdropFilter: 'blur(32px)',
+    WebkitBackdropFilter: 'blur(32px)', border: '1px solid rgba(255,255,255,0.6)',
+    borderRadius: '2rem', padding: '2.5rem', boxShadow: '0 8px 64px rgba(0,0,0,0.25)',
+  };
+
+  return (
+    <motion.div initial={{ opacity:0, x:30 }} animate={{ opacity:1, x:0 }}
+      exit={{ opacity:0, x:-30 }} className="w-full" style={cardStyle}>
+
+      {/* Header */}
+      <div className="flex items-center gap-3 mb-6">
+        <button onClick={onBack} className="p-2 rounded-xl hover:bg-black/5 transition-colors text-agri-green-700">
+          ← 
+        </button>
+        <div>
+          <h2 className="text-2xl font-black text-agri-green-950 tracking-tight">
+            {step === 'done' ? '¡Listo!' : 'Recuperar contraseña'}
+          </h2>
+          <p className="text-earth-500 text-xs mt-0.5">
+            {step === 'email'       && 'Ingresa tu correo registrado'}
+            {step === 'otp'        && `Código enviado a ${email}`}
+            {step === 'newpassword' && 'Crea tu nueva contraseña'}
+            {step === 'done'        && 'Contraseña actualizada'}
+          </p>
+        </div>
+      </div>
+
+      {/* Paso 1 — Email */}
+      {step === 'email' && (
+        <div className="space-y-4">
+          <div className="space-y-1.5">
+            <label className="text-[10px] font-black text-agri-green-900 uppercase tracking-widest ml-1">Correo electrónico</label>
+            <input type="email" value={email} onChange={e => setEmail(e.target.value)}
+              placeholder="nombre@gmail.com"
+              className="glass-input w-full rounded-2xl px-4 py-3.5 text-sm font-medium outline-none transition-all"
+              style={inputStyle}
+              onFocus={e => { e.target.style.border='1px solid rgba(22,163,74,0.8)'; e.target.style.background='rgba(255,255,255,0.75)'; }}
+              onBlur={e  => { e.target.style.border='1px solid rgba(0,0,0,0.12)'; e.target.style.background='rgba(255,255,255,0.55)'; }}
+              onKeyDown={e => e.key === 'Enter' && handleSendOTP()}
+            />
+          </div>
+          {error && <p className="text-red-600 text-xs font-bold flex items-center gap-1"><AlertCircle size={12}/>{error}</p>}
+          <button onClick={handleSendOTP} disabled={loading}
+            className="w-full py-4 rounded-2xl font-black text-sm text-white transition-all disabled:opacity-50"
+            style={{ background:'#16a34a' }}>
+            {loading ? <Loader2 className="animate-spin mx-auto" size={18}/> : 'Enviar código →'}
+          </button>
+        </div>
+      )}
+
+      {/* Paso 2 — OTP */}
+      {step === 'otp' && (
+        <div className="space-y-5">
+          <p className="text-earth-500 text-sm text-center">Ingresa el código de 6 dígitos de tu correo</p>
+          <div className="flex justify-center gap-3">
+            {digits.map((d, i) => (
+              <input key={i} ref={refs[i]} type="text" inputMode="numeric" maxLength={1} value={d}
+                onChange={e => handleDigitChange(i, e.target.value)}
+                onKeyDown={e => handleDigitKey(i, e)}
+                className="w-12 h-14 text-center text-2xl font-black rounded-2xl outline-none transition-all"
+                style={{ background: d ? 'rgba(46,125,50,0.12)':'rgba(255,255,255,0.6)', border: d ? '2px solid #2E7D32':'2px solid rgba(0,0,0,0.12)', color:'#1B5E20' }}
+                onFocus={e => e.target.style.border='2px solid #2E7D32'}
+                onBlur={e  => e.target.style.border= d ? '2px solid #2E7D32':'2px solid rgba(0,0,0,0.12)'}
+              />
+            ))}
+          </div>
+          {error && <p className="text-red-600 text-xs font-bold flex items-center justify-center gap-1"><AlertCircle size={12}/>{error}</p>}
+          <button onClick={handleVerifyOTP} disabled={digits.join('').length < 6}
+            className="w-full py-4 rounded-2xl font-black text-sm text-white transition-all disabled:opacity-50"
+            style={{ background:'#16a34a' }}>
+            Verificar código →
+          </button>
+        </div>
+      )}
+
+      {/* Paso 3 — Nueva contraseña */}
+      {step === 'newpassword' && (
+        <div className="space-y-4">
+          <div className="space-y-1.5">
+            <label className="text-[10px] font-black text-agri-green-900 uppercase tracking-widest ml-1">Nueva contraseña</label>
+            <div className="relative">
+              <input type={showPwd ? 'text' : 'password'} value={newPassword}
+                onChange={e => setNewPassword(e.target.value)}
+                placeholder="Mínimo 8 caracteres"
+                className="glass-input w-full rounded-2xl pl-4 pr-12 py-3.5 text-sm font-medium outline-none transition-all"
+                style={inputStyle}
+                onFocus={e => { e.target.style.border='1px solid rgba(22,163,74,0.8)'; e.target.style.background='rgba(255,255,255,0.75)'; }}
+                onBlur={e  => { e.target.style.border='1px solid rgba(0,0,0,0.12)'; e.target.style.background='rgba(255,255,255,0.55)'; }}
+              />
+              <button type="button" onClick={() => setShowPwd(!showPwd)}
+                className="absolute right-4 top-1/2 -translate-y-1/2 text-agri-green-700/50 hover:text-agri-green-700">
+                {showPwd ? <EyeOff size={16}/> : <Eye size={16}/>}
+              </button>
+            </div>
+            {newPassword.length > 0 && (
+              <div className="p-3 rounded-2xl space-y-2 mt-2"
+                style={{ background:'rgba(255,255,255,0.5)', border:'1px solid rgba(0,0,0,0.08)' }}>
+                <div className="flex gap-1">
+                  {PASSWORD_RULES.map((_, i) => (
+                    <div key={i} className={`h-1.5 flex-1 rounded-full transition-all ${i < strength ? STRENGTH_COLORS[strength] : 'bg-black/10'}`} />
+                  ))}
+                </div>
+                {PASSWORD_RULES.map(rule => {
+                  const ok = rule.test(newPassword);
+                  return (
+                    <div key={rule.id} className="flex items-center gap-2">
+                      {ok ? <CheckCircle2 size={12} className="text-agri-green-600 flex-shrink-0"/>
+                          : <XCircle      size={12} className="text-earth-300 flex-shrink-0"/>}
+                      <span className={`text-xs font-bold ${ok ? 'text-agri-green-700' : 'text-earth-400'}`}>{rule.label}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+          {error && <p className="text-red-600 text-xs font-bold flex items-center gap-1"><AlertCircle size={12}/>{error}</p>}
+          <button onClick={handleReset} disabled={loading || !allPassed}
+            className="w-full py-4 rounded-2xl font-black text-sm text-white transition-all disabled:opacity-50"
+            style={{ background:'#16a34a' }}>
+            {loading ? <Loader2 className="animate-spin mx-auto" size={18}/> : 'Cambiar contraseña →'}
+          </button>
+        </div>
+      )}
+
+      {/* Paso 4 — Éxito */}
+      {step === 'done' && (
+        <div className="text-center space-y-5">
+          <div className="w-20 h-20 rounded-full bg-agri-green-100 flex items-center justify-center mx-auto">
+            <CheckCircle2 size={44} className="text-agri-green-600"/>
+          </div>
+          <p className="text-earth-600 text-sm leading-relaxed">
+            Tu contraseña ha sido actualizada correctamente. Ya puedes iniciar sesión con tu nueva contraseña.
+          </p>
+          <button onClick={onBack}
+            className="w-full py-4 rounded-2xl font-black text-sm text-white transition-all"
+            style={{ background:'#16a34a' }}>
+            Ir al inicio de sesión →
+          </button>
+        </div>
+      )}
+    </motion.div>
+  );
+}
+
 export default function AuthPage() {
   const year = useYear();
   const [currentSlide, setCurrentSlide] = useState(0);
@@ -176,6 +392,7 @@ export default function AuthPage() {
   const [error,           setError]           = useState<string | null>(null);
   const [pwdFocused,      setPwdFocused]      = useState(false);
   const [showOTP,         setShowOTP]         = useState(false);
+  const [showForgot,      setShowForgot]      = useState(false);
   const [pendingEmail,    setPendingEmail]    = useState('');
 
   const strength  = getStrength(password);
@@ -276,7 +493,12 @@ export default function AuthPage() {
         {/* Columna derecha */}
         <div className="w-full lg:w-[460px] flex items-center justify-center p-6 lg:p-10">
           <AnimatePresence mode="wait">
-            {showOTP ? (
+            {showForgot ? (
+              <motion.div key="forgot" initial={{ opacity:0, x:30 }} animate={{ opacity:1, x:0 }}
+                exit={{ opacity:0, x:-30 }} className="w-full">
+                <ForgotPasswordScreen onBack={() => setShowForgot(false)} />
+              </motion.div>
+            ) : showOTP ? (
               <motion.div key="otp" initial={{ opacity: 0, x: 30 }} animate={{ opacity: 1, x: 0 }}
                 exit={{ opacity: 0, x: -30 }} className="w-full">
                 <OTPScreen email={pendingEmail} onSuccess={handleOTPSuccess} />
@@ -391,6 +613,16 @@ export default function AuthPage() {
                       )}
                     </AnimatePresence>
                   </div>
+
+                  {/* Link olvidé contraseña — solo en login */}
+                  {isLogin && (
+                    <div className="text-right -mt-2">
+                      <button type="button" onClick={() => setShowForgot(true)}
+                        className="text-xs font-bold text-agri-green-700 hover:text-agri-green-900 transition-colors">
+                        ¿Olvidaste tu contraseña?
+                      </button>
+                    </div>
+                  )}
 
                   <AnimatePresence>
                     {error && (
