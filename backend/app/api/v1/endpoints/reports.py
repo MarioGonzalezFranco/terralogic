@@ -5,8 +5,7 @@
 import io
 import base64
 from datetime import datetime
-from fastapi import APIRouter
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, Response
 from pydantic import BaseModel
 from typing import Optional
 
@@ -42,12 +41,12 @@ class ReportRequest(BaseModel):
     resultado:         str
     ndvi:              float
     cobertura_vegetal: int
-    enfermedades:      dict   # { count, detalle }
-    estres_hidrico:    dict   # { porcentaje, nivel }
-    plagas:            dict   # { count, detalle }
+    enfermedades:      dict
+    estres_hidrico:    dict
+    plagas:            dict
     insight:           str
     confianza:         float
-    image_base64:      Optional[str] = None  # imagen en base64 (sin prefijo data:...)
+    image_base64:      Optional[str] = None
     image_mime:        Optional[str] = "image/jpeg"
 
 
@@ -106,11 +105,6 @@ def make_styles():
 # ── Endpoint ──────────────────────────────────────────────────
 @router.post("/generate")
 def generate_report(data: ReportRequest):
-    """
-    Genera un PDF con los resultados del análisis de Gemini.
-    Recibe los datos del análisis + imagen en base64 (opcional).
-    Devuelve el PDF como stream descargable.
-    """
     buffer = io.BytesIO()
     W, H   = A4
     margin = 18 * mm
@@ -126,26 +120,26 @@ def generate_report(data: ReportRequest):
 
     S     = make_styles()
     story = []
-    cw    = W - 2 * margin   # content width
+    cw    = W - 2 * margin
 
     # ── HEADER ───────────────────────────────────────────────
     now      = datetime.now().strftime("%d/%m/%Y %H:%M")
     res_fg, res_bg = result_color(data.resultado)
 
     header_data = [[
-        Paragraph("🌱 TerraLogic AI", S['header_brand']),
+        Paragraph("TerraLogic AI", S['header_brand']),
         Paragraph(f"Reporte generado el {now}", S['header_sub']),
     ]]
     header_table = Table(header_data, colWidths=[cw * 0.6, cw * 0.4])
     header_table.setStyle(TableStyle([
-        ('BACKGROUND',  (0,0), (-1,-1), GREEN_DARK),
+        ('BACKGROUND',   (0,0), (-1,-1), GREEN_DARK),
         ('ROUNDEDCORNERS', [8]),
-        ('TOPPADDING',  (0,0), (-1,-1), 14),
+        ('TOPPADDING',   (0,0), (-1,-1), 14),
         ('BOTTOMPADDING',(0,0), (-1,-1), 14),
-        ('LEFTPADDING', (0,0), (0,-1),  16),
-        ('RIGHTPADDING',(-1,0),(-1,-1), 16),
-        ('VALIGN',      (0,0), (-1,-1), 'MIDDLE'),
-        ('ALIGN',       (1,0), (1,-1),  'RIGHT'),
+        ('LEFTPADDING',  (0,0), (0,-1),  16),
+        ('RIGHTPADDING', (-1,0),(-1,-1), 16),
+        ('VALIGN',       (0,0), (-1,-1), 'MIDDLE'),
+        ('ALIGN',        (1,0), (1,-1),  'RIGHT'),
     ]))
     story.append(header_table)
     story.append(Spacer(1, 5*mm))
@@ -178,7 +172,11 @@ def generate_report(data: ReportRequest):
     # ── IMAGEN DEL CULTIVO ────────────────────────────────────
     if data.image_base64:
         try:
-            img_bytes = base64.b64decode(data.image_base64)
+            # Limpiar prefijo data:image/...;base64, si existe
+            img_b64 = data.image_base64
+            if ',' in img_b64:
+                img_b64 = img_b64.split(',')[1]
+            img_bytes = base64.b64decode(img_b64)
             img_buf   = io.BytesIO(img_bytes)
             img       = RLImage(img_buf, width=cw, height=55*mm)
             img.hAlign = 'CENTER'
@@ -186,19 +184,18 @@ def generate_report(data: ReportRequest):
             img_table = Table([[img]], colWidths=[cw])
             img_table.setStyle(TableStyle([
                 ('ROUNDEDCORNERS', [8]),
-                ('OVERFLOW',       (0,0), (-1,-1), 'hidden'),
-                ('TOPPADDING',     (0,0), (-1,-1), 0),
-                ('BOTTOMPADDING',  (0,0), (-1,-1), 0),
-                ('LEFTPADDING',    (0,0), (-1,-1), 0),
-                ('RIGHTPADDING',   (0,0), (-1,-1), 0),
+                ('TOPPADDING',    (0,0), (-1,-1), 0),
+                ('BOTTOMPADDING', (0,0), (-1,-1), 0),
+                ('LEFTPADDING',   (0,0), (-1,-1), 0),
+                ('RIGHTPADDING',  (0,0), (-1,-1), 0),
             ]))
             story.append(img_table)
             story.append(Spacer(1, 5*mm))
         except Exception:
-            pass  # Si falla la imagen, continúa sin ella
+            pass
 
     # ── MÉTRICAS PRINCIPALES ──────────────────────────────────
-    story.append(Paragraph("Métricas del análisis", S['section']))
+    story.append(Paragraph("Metricas del analisis", S['section']))
 
     def metric_cell(label, value, unit="", bg=GRAY_LIGHT):
         inner = Table([
@@ -215,15 +212,14 @@ def generate_report(data: ReportRequest):
         ]))
         return inner
 
-    # Color del estrés hídrico
-    stress = data.estres_hidrico['porcentaje']
+    stress    = data.estres_hidrico['porcentaje']
     stress_bg = RED_LIGHT if stress > 50 else ORANGE_LIGHT if stress > 25 else GREEN_LIGHT
 
     metrics = Table([[
-        metric_cell("NDVI",             f"{data.ndvi:.2f}"),
-        metric_cell("Cobertura",        data.cobertura_vegetal, "%"),
-        metric_cell("Estres Hidrico",   stress, "%", stress_bg),
-        metric_cell("Confianza IA",     f"{int(data.confianza*100)}", "%"),
+        metric_cell("NDVI",           f"{data.ndvi:.2f}"),
+        metric_cell("Cobertura",      data.cobertura_vegetal, "%"),
+        metric_cell("Estres Hidrico", stress, "%", stress_bg),
+        metric_cell("Confianza IA",   f"{int(data.confianza*100)}", "%"),
     ]], colWidths=[(cw/4) - 1*mm] * 4, hAlign='LEFT')
     metrics.setStyle(TableStyle([
         ('LEFTPADDING',  (0,0), (-1,-1), 1.5*mm),
@@ -234,13 +230,13 @@ def generate_report(data: ReportRequest):
     story.append(metrics)
     story.append(Spacer(1, 5*mm))
 
-    # ── DETALLE: ENFERMEDADES, PLAGAS, ESTRÉS ────────────────
+    # ── DETALLE ───────────────────────────────────────────────
     story.append(Paragraph("Detalle de hallazgos", S['section']))
 
-    def detail_row(icon, label, count, detalle, alert=False):
+    def detail_row(label, count, detalle, alert=False):
         count_color = RED if alert and count > 0 else GREEN_MID
         row = Table([[
-            Paragraph(f"{icon}  {label}", S['body']),
+            Paragraph(label, S['body']),
             Paragraph(str(count), ParagraphStyle('cnt',
                 fontName='Helvetica-Bold', fontSize=14,
                 textColor=count_color, alignment=TA_CENTER)),
@@ -258,29 +254,21 @@ def generate_report(data: ReportRequest):
         ]))
         return row
 
-    story.append(detail_row("Enfermedades",
-        "Enfermedades detectadas",
-        data.enfermedades['count'],
-        data.enfermedades['detalle'],
-        alert=True))
+    story.append(detail_row("Enfermedades detectadas",
+        data.enfermedades['count'], data.enfermedades['detalle'], alert=True))
     story.append(Spacer(1, 2*mm))
 
-    story.append(detail_row("Plagas",
-        "Plagas detectadas",
-        data.plagas['count'],
-        data.plagas['detalle'],
-        alert=True))
+    story.append(detail_row("Plagas detectadas",
+        data.plagas['count'], data.plagas['detalle'], alert=True))
     story.append(Spacer(1, 2*mm))
 
-    nivel = data.estres_hidrico['nivel']
-    story.append(detail_row("Estres Hidrico",
-        "Nivel de estres hidrico",
+    story.append(detail_row("Nivel de estres hidrico",
         data.estres_hidrico['porcentaje'],
-        f"Nivel: {nivel}",
+        f"Nivel: {data.estres_hidrico['nivel']}",
         alert=stress > 25))
     story.append(Spacer(1, 5*mm))
 
-    # ── INSIGHT DE GEMINI ─────────────────────────────────────
+    # ── INSIGHT ───────────────────────────────────────────────
     story.append(Paragraph("Insight de Gemini AI", S['section']))
 
     insight_inner = Table([
@@ -309,10 +297,15 @@ def generate_report(data: ReportRequest):
 
     doc.build(story)
     buffer.seek(0)
+    pdf_bytes = buffer.read()
 
     filename = f"reporte-terralogic-{data.field_name.replace(' ', '-').lower()}.pdf"
-    return StreamingResponse(
-        buffer,
+    return Response(
+        content=pdf_bytes,
         media_type="application/pdf",
-        headers={"Content-Disposition": f"attachment; filename={filename}"}
+        headers={
+            "Content-Disposition": f"attachment; filename={filename}",
+            "Content-Length": str(len(pdf_bytes)),
+            "Access-Control-Expose-Headers": "Content-Disposition",
+        }
     )
